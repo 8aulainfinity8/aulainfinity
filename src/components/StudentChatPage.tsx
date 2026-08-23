@@ -25,7 +25,8 @@ import {
     Camera,
     PenTool,
     Video,
-    HelpCircle
+    HelpCircle,
+    ChevronDown
 } from 'lucide-react';
 import { ROUTES } from '../constants/routes';
 import { normalizeMessageTimestamp, formatMessageTime } from '../utils/chatUtils';
@@ -313,6 +314,21 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const [showNewMessageIndicator, setShowNewMessageIndicator] = useState(false);
+    const prevConvoIdRef = useRef<string | null>(null);
+    const prevItemsLengthRef = useRef<number>(0);
+
+    const checkIsNearBottom = useCallback(() => {
+        if (!scrollRef.current) return true;
+        const { scrollHeight, scrollTop, clientHeight } = scrollRef.current;
+        return scrollHeight - scrollTop - clientHeight < 150;
+    }, []);
+
+    const handleScroll = useCallback(() => {
+        if (showNewMessageIndicator && checkIsNearBottom()) {
+            setShowNewMessageIndicator(false);
+        }
+    }, [showNewMessageIndicator, checkIsNearBottom]);
 
     const studentId = user?.role === 'student' ? user.id : '';
     const studentName = user?.role === 'student' ? user.name : '';
@@ -673,12 +689,47 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
         overscan: 15,
     });
 
-    // Scroll chat stream to bottom when messages amount or active conversation changes
-    useEffect(() => {
+    const scrollToBottom = useCallback((smooth = true) => {
+        setShowNewMessageIndicator(false);
         if (flattenedItems.length > 0) {
-            rowVirtualizer.scrollToIndex(flattenedItems.length - 1, { align: 'end' });
+            rowVirtualizer.scrollToIndex(flattenedItems.length - 1, {
+                align: 'end',
+                behavior: smooth ? 'smooth' : 'auto'
+            });
         }
-    }, [flattenedItems.length, activeConvoId]);
+    }, [flattenedItems.length, rowVirtualizer]);
+
+    // Scroll chat stream to bottom or show indicator depending on scroll position and message origin
+    useEffect(() => {
+        if (flattenedItems.length === 0) return;
+
+        const isNewConvo = activeConvoId !== prevConvoIdRef.current;
+        const isNewMessage = flattenedItems.length > prevItemsLengthRef.current;
+
+        prevConvoIdRef.current = activeConvoId;
+        prevItemsLengthRef.current = flattenedItems.length;
+
+        if (isNewConvo) {
+            setShowNewMessageIndicator(false);
+            scrollToBottom(false);
+            return;
+        }
+
+        if (isNewMessage) {
+            const lastItem = flattenedItems[flattenedItems.length - 1];
+            const isMyMessage = lastItem?.type === 'message' && lastItem.message?.senderId === studentId;
+            const isNearBottom = checkIsNearBottom();
+
+            if (isMyMessage || isNearBottom) {
+                setShowNewMessageIndicator(false);
+                requestAnimationFrame(() => {
+                    scrollToBottom(true);
+                });
+            } else {
+                setShowNewMessageIndicator(true);
+            }
+        }
+    }, [flattenedItems, activeConvoId, studentId, checkIsNearBottom, scrollToBottom]);
 
     // Filter conversations list based on query search
     const filteredConversationsList = useMemo(() => {
@@ -1348,63 +1399,76 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
                             )}
 
                             {/* Messages Stream Container */}
-                            <div 
-                                ref={scrollRef}
-                                className="flex-1 overflow-y-auto overflow-x-hidden px-3.5 sm:px-4 md:px-6 py-6 min-h-0"
-                            >
-                                {(activeChatType === 'group' ? loadingGroupMessages : loadingMessages) ? (
-                                    <div className="h-full flex justify-center items-center"><Spinner /></div>
-                                ) : flattenedItems.length > 0 ? (
-                                    <div 
-                                        className="w-full relative"
-                                        style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+                            <div className="relative flex-1 flex flex-col min-h-0">
+                                <div 
+                                    ref={scrollRef}
+                                    onScroll={handleScroll}
+                                    className="flex-1 overflow-y-auto overflow-x-hidden px-3.5 sm:px-4 md:px-6 py-6 min-h-0"
+                                >
+                                    {(activeChatType === 'group' ? loadingGroupMessages : loadingMessages) ? (
+                                        <div className="h-full flex justify-center items-center"><Spinner /></div>
+                                    ) : flattenedItems.length > 0 ? (
+                                        <div 
+                                            className="w-full relative"
+                                            style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+                                        >
+                                            {rowVirtualizer.getVirtualItems().map(virtualRow => {
+                                                const item = flattenedItems[virtualRow.index];
+                                                if (!item) return null;
+                                                return (
+                                                    <div
+                                                        key={item.id}
+                                                        ref={rowVirtualizer.measureElement}
+                                                        data-index={virtualRow.index}
+                                                        style={{
+                                                            position: 'absolute',
+                                                            top: 0,
+                                                            left: 0,
+                                                            width: '100%',
+                                                            transform: `translateY(${virtualRow.start}px)`,
+                                                        }}
+                                                        className="py-1"
+                                                    >
+                                                        {item.type === 'date' ? (
+                                                            /* Date Separator */
+                                                            <div className="text-center my-3">
+                                                                <span className="px-3 py-1 bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-350 text-[11px] font-bold rounded-full border border-slate-300/30">
+                                                                    {item.date}
+                                                                </span>
+                                                            </div>
+                                                        ) : (
+                                                            <PeerMessageBubble 
+                                                                message={item.message} 
+                                                                currentStudentId={studentId} 
+                                                            />
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        <div className="h-full flex flex-col justify-center items-center text-center text-slate-400">
+                                            <Smile className="w-16 h-16 text-indigo-300 dark:text-indigo-900/40 mb-3" />
+                                            <p className="text-sm font-bold text-slate-600 dark:text-slate-400">
+                                                {activeChatType === 'group' ? '¡Bienvenido al canal del curso!' : '¡Conexión establecida con éxito!'}
+                                            </p>
+                                            <p className="text-xs text-slate-400 max-w-xs mt-1">
+                                                {activeChatType === 'group' 
+                                                    ? 'Colabora, pregunta dudas y comparte material de estudio con tus compañeros en tiempo real.' 
+                                                    : 'Escribe un mensaje de bienvenida a continuación para iniciar la conversación de estudio.'}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                                {showNewMessageIndicator && (
+                                    <button
+                                        type="button"
+                                        onClick={() => scrollToBottom(true)}
+                                        className="absolute bottom-4 right-6 z-20 flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-full shadow-lg transition-all animate-bounce cursor-pointer border border-white/20"
                                     >
-                                        {rowVirtualizer.getVirtualItems().map(virtualRow => {
-                                            const item = flattenedItems[virtualRow.index];
-                                            if (!item) return null;
-                                            return (
-                                                <div
-                                                    key={item.id}
-                                                    ref={rowVirtualizer.measureElement}
-                                                    data-index={virtualRow.index}
-                                                    style={{
-                                                        position: 'absolute',
-                                                        top: 0,
-                                                        left: 0,
-                                                        width: '100%',
-                                                        transform: `translateY(${virtualRow.start}px)`,
-                                                    }}
-                                                    className="py-1"
-                                                >
-                                                    {item.type === 'date' ? (
-                                                        /* Date Separator */
-                                                        <div className="text-center my-3">
-                                                            <span className="px-3 py-1 bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-350 text-[11px] font-bold rounded-full border border-slate-300/30">
-                                                                {item.date}
-                                                            </span>
-                                                        </div>
-                                                    ) : (
-                                                        <PeerMessageBubble 
-                                                            message={item.message} 
-                                                            currentStudentId={studentId} 
-                                                        />
-                                                    )}
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                ) : (
-                                    <div className="h-full flex flex-col justify-center items-center text-center text-slate-400">
-                                        <Smile className="w-16 h-16 text-indigo-300 dark:text-indigo-900/40 mb-3" />
-                                        <p className="text-sm font-bold text-slate-600 dark:text-slate-400">
-                                            {activeChatType === 'group' ? '¡Bienvenido al canal del curso!' : '¡Conexión establecida con éxito!'}
-                                        </p>
-                                        <p className="text-xs text-slate-400 max-w-xs mt-1">
-                                            {activeChatType === 'group' 
-                                                ? 'Colabora, pregunta dudas y comparte material de estudio con tus compañeros en tiempo real.' 
-                                                : 'Escribe un mensaje de bienvenida a continuación para iniciar la conversación de estudio.'}
-                                        </p>
-                                    </div>
+                                        <ChevronDown className="w-4 h-4" />
+                                        <span>Nuevos mensajes</span>
+                                    </button>
                                 )}
                             </div>
 

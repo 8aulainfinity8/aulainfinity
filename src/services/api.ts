@@ -723,7 +723,7 @@ export const fetchUsers = async (): Promise<StudentUser[]> => {
             const usersRef = collection(db, 'users');
             const studentsRef = collection(db, 'students');
             const [usersSnap, studentsSnap] = await Promise.all([
-                getDocs(usersRef).catch(() => null),
+                getDocs(query(usersRef, where('role', '==', 'student'))).catch(() => null),
                 getDocs(studentsRef).catch(() => null)
             ]);
 
@@ -790,7 +790,7 @@ export const fetchTeachers = async (): Promise<TeacherUser[]> => {
             const usersRef = collection(db, 'users');
             const teachersRef = collection(db, 'teachers');
             const [usersSnap, teachersSnap] = await Promise.all([
-                getDocs(usersRef).catch(() => null),
+                getDocs(query(usersRef, where('role', '==', 'teacher'))).catch(() => null),
                 getDocs(teachersRef).catch(() => null)
             ]);
 
@@ -1257,7 +1257,8 @@ export const fetchComments = async (videoId: string): Promise<Comment[]> => {
     if (db) {
         try {
             const commentsRef = collection(db, 'firestore_comments');
-            const snap = await getDocs(commentsRef).catch(() => null);
+            const q = query(commentsRef, where('videoId', '==', videoId));
+            const snap = await getDocs(q).catch(() => null);
             if (snap) {
                 const firestoreComments: Comment[] = [];
                 snap.docs.forEach(docSnap => {

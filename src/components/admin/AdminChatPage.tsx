@@ -35,20 +35,20 @@ const ConversationItem: React.FC<{
     const badge = useMemo(() => {
         if (!conversation.teacherId) {
             return (
-                <span className="text-[10px] uppercase font-bold tracking-wider bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-400 px-1.5 py-0.5 rounded">
+                <span className="text-[10px] uppercase font-bold tracking-wider bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 px-1.5 py-0.5 rounded">
                     Sin tutor
                 </span>
             );
         }
         if (isTeacher && conversation.teacherId === user?.id) {
             return (
-                <span className="text-[10px] uppercase font-bold tracking-wider bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-400 px-1.5 py-0.5 rounded">
+                <span className="text-[10px] uppercase font-bold tracking-wider bg-green-100 text-green-800 dark:bg-emerald-900/60 dark:text-emerald-200 px-1.5 py-0.5 rounded">
                     Mi alumno
                 </span>
             );
         }
         return (
-            <span className="text-[10px] uppercase font-bold tracking-wider bg-indigo-50 text-indigo-700 dark:bg-indigo-950/35 dark:text-indigo-400 px-1.5 py-0.5 rounded truncate max-w-[120px]">
+            <span className="text-[10px] uppercase font-bold tracking-wider bg-indigo-50 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-200 px-1.5 py-0.5 rounded truncate max-w-[120px]">
                 {conversation.teacherName}
             </span>
         );
@@ -57,13 +57,13 @@ const ConversationItem: React.FC<{
     const channelBadge = useMemo(() => {
         if (conversation.id.includes('_')) {
             return (
-                <span className="text-[10px] uppercase font-bold tracking-wider bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-400 px-1.5 py-0.5 rounded">
+                <span className="text-[10px] uppercase font-bold tracking-wider bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-200 px-1.5 py-0.5 rounded">
                     Tutoría Directa
                 </span>
             );
         }
         return (
-            <span className="text-[10px] uppercase font-bold tracking-wider bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-400 px-1.5 py-0.5 rounded">
+            <span className="text-[10px] uppercase font-bold tracking-wider bg-sky-100 text-sky-800 dark:bg-sky-900/60 dark:text-sky-200 px-1.5 py-0.5 rounded">
                 Soporte Gral.
             </span>
         );
@@ -442,7 +442,7 @@ export const AdminChatPage: React.FC = () => {
 
     // Resolve user names
     const { data: allUsers } = useQuery({
-        queryKey: ['users-list'],
+        queryKey: ['users'],
         queryFn: api.fetchUsers
     });
 
@@ -484,36 +484,46 @@ export const AdminChatPage: React.FC = () => {
 
     // Real-time Firestore event listeners to update UI immediately
     useEffect(() => {
-        const handleUpdate = () => {
+        const handleDirectMessageUpdate = () => {
             queryClient.invalidateQueries({ queryKey: ['messages'] });
-            queryClient.invalidateQueries({ queryKey: ['groupMessages'] });
-            queryClient.invalidateQueries({ queryKey: ['peerMessages'] });
-            queryClient.invalidateQueries({ queryKey: ['teacherMessages'] });
             queryClient.invalidateQueries({ queryKey: ['conversations'] });
-            queryClient.invalidateQueries({ queryKey: ['groupConversations'] });
+        };
+        const handleTeacherMessageUpdate = () => {
+            queryClient.invalidateQueries({ queryKey: ['teacherMessages'] });
+        };
+        const handlePeerMessageUpdate = () => {
+            queryClient.invalidateQueries({ queryKey: ['peerMessages'] });
             queryClient.invalidateQueries({ queryKey: ['peerConversations'] });
+        };
+        const handleGroupMessageUpdate = () => {
+            queryClient.invalidateQueries({ queryKey: ['groupMessages'] });
+            queryClient.invalidateQueries({ queryKey: ['groupConversations'] });
+        };
+        const handleUserUpdate = () => {
             queryClient.invalidateQueries({ queryKey: ['users'] });
             queryClient.invalidateQueries({ queryKey: ['teachers'] });
+            queryClient.invalidateQueries({ queryKey: ['conversations'] });
+            queryClient.invalidateQueries({ queryKey: ['peerConversations'] });
         };
 
-        eventEmitter.on('message-update', handleUpdate);
-        eventEmitter.on('direct-message-update', handleUpdate);
-        eventEmitter.on('teacher-message-update', handleUpdate);
-        eventEmitter.on('teacher-message-deleted', handleUpdate);
-        eventEmitter.on('peer-message-update', handleUpdate);
-        eventEmitter.on('group-message-update', handleUpdate);
-        eventEmitter.on('course-group-message-update', handleUpdate);
-        eventEmitter.on('user-update', handleUpdate);
+        eventEmitter.on('message-update', handleDirectMessageUpdate);
+        eventEmitter.on('direct-message-update', handleDirectMessageUpdate);
+        eventEmitter.on('teacher-message-update', handleTeacherMessageUpdate);
+        eventEmitter.on('teacher-message-deleted', handleTeacherMessageUpdate);
+        eventEmitter.on('peer-message-update', handlePeerMessageUpdate);
+        eventEmitter.on('group-message-update', handleGroupMessageUpdate);
+        eventEmitter.on('course-group-message-update', handleGroupMessageUpdate);
+        eventEmitter.on('user-update', handleUserUpdate);
 
         return () => {
-            eventEmitter.off('message-update', handleUpdate);
-            eventEmitter.off('direct-message-update', handleUpdate);
-            eventEmitter.off('teacher-message-update', handleUpdate);
-            eventEmitter.off('teacher-message-deleted', handleUpdate);
-            eventEmitter.off('peer-message-update', handleUpdate);
-            eventEmitter.off('group-message-update', handleUpdate);
-            eventEmitter.off('course-group-message-update', handleUpdate);
-            eventEmitter.off('user-update', handleUpdate);
+            eventEmitter.off('message-update', handleDirectMessageUpdate);
+            eventEmitter.off('direct-message-update', handleDirectMessageUpdate);
+            eventEmitter.off('teacher-message-update', handleTeacherMessageUpdate);
+            eventEmitter.off('teacher-message-deleted', handleTeacherMessageUpdate);
+            eventEmitter.off('peer-message-update', handlePeerMessageUpdate);
+            eventEmitter.off('group-message-update', handleGroupMessageUpdate);
+            eventEmitter.off('course-group-message-update', handleGroupMessageUpdate);
+            eventEmitter.off('user-update', handleUserUpdate);
         };
     }, [queryClient]);
 

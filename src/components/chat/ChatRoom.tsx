@@ -182,7 +182,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                 <div ref={messagesEndRef} />
             </div>
             
-            <form onSubmit={onSendMessage} className="p-3 md:p-4 bg-white dark:bg-slate-800 border-t dark:border-slate-700 flex-shrink-0 w-full max-w-full box-border overflow-hidden">
+            <form onSubmit={onSendMessage} className="p-3 pb-5 sm:p-3 md:p-4 bg-white dark:bg-slate-800 border-t dark:border-slate-700 flex-shrink-0 w-full max-w-full box-border overflow-hidden">
                 {attachments.length > 0 && (
                     <div className="flex flex-wrap gap-2 mb-2 p-2 bg-gray-50 dark:bg-slate-900 rounded-lg border dark:border-slate-700 animate-fade-in">
                         {attachments.map((att, index) => (

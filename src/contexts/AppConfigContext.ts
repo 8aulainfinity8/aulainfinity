@@ -42,11 +42,15 @@ export const AppConfigProvider: React.FC<{ children: ReactNode }> = ({ children 
     }, [queryClient]);
 
     const updateConfig = useCallback((newConfig: AppConfig) => {
+        setThemeConfig(newConfig);
+    }, []);
+
+    const setThemeConfig = (newConfig: AppConfig) => {
         setAppConfig(newConfig);
         queryClient.setQueryData(['appConfig'], newConfig);
-    }, [queryClient]);
+    };
     
-    const value = { appConfig, updateConfig };
+    const value = React.useMemo(() => ({ appConfig, updateConfig }), [appConfig, updateConfig]);
 
     // FIX: Replaced JSX with React.createElement to resolve parsing errors in .ts file.
     return React.createElement(AppConfigContext.Provider, { value: value }, children);
