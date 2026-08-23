@@ -2286,7 +2286,6 @@ export const syncClearChatMessagesInFirestore = async (conversationId: string): 
         await adminClearChatMessages({ conversationId });
     } catch (e) {
         console.warn('Failed to clear chat messages via Callable Function:', e);
-        throw e;
     }
 };
 

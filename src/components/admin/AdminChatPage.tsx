@@ -11,7 +11,7 @@ import { PaperAirplaneIcon, ChatBubbleLeftRightIcon, UserCircleIcon, PencilIcon,
 import { Spinner } from '../ui/Spinner';
 import { EmptyState } from '../ui/EmptyState';
 import { CameraModal } from '../CameraModal';
-import { Phone, PenTool, Users, ArrowLeft, Video, X, CheckCircle } from 'lucide-react';
+import { Phone, PenTool, Users, ArrowLeft, Video, X, CheckCircle, ShieldAlert } from 'lucide-react';
 import { VoiceGroupCall } from '../VoiceGroupCall';
 import { Whiteboard } from '../Whiteboard';
 import { ClassReplayModal } from '../ClassReplayModal';

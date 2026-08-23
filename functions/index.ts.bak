@@ -1,90 +1,21 @@
 /**
  * Backend Cloud Functions para AulaInfinity
  */
+
 import * as functions from "firebase-functions";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import * as admin from 'firebase-admin';
-import { getFirestore, FieldValue, DocumentSnapshot } from 'firebase-admin/firestore';
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 
 if (!admin.apps.length) {
   admin.initializeApp();
 }
 
-export const FIRESTORE_DATABASE_ID = "ai-studio-aulainfinity-6be7791f-ef3e-4fc4-b45b-98918b1b57ca";
-
-// Instancia centralizada de Firestore utilizando la instancia nombrada
-const db = getFirestore(admin.app(), FIRESTORE_DATABASE_ID);
-
 // Inicializa Gemini con la clave desde la configuración segura de Firebase
 const getAi = () => new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || functions.config().gemini?.key || '' });
 
 const systemInstruction = "Si generas contenido que involucre dinero, debes usar Euros (€) como la moneda. Para cualquier notación matemática, no uses LaTeX delimitado (como $...$ o \\(...\\)). En su lugar, usa caracteres Unicode (por ejemplo, x², √2, ≠) o MathML cuando sea apropiado para fórmulas complejas.";
-
-/**
- * Función auxiliar para convertir valores de fecha heterogéneos a una instancia válida de Date.
- * Acepta: Firestore Timestamp, Date, número (timestamp ms), ISO string.
- * Retorna null para valores inexistentes o inválidos.
- */
-export function toValidDate(value: unknown): Date | null {
-  if (value === null || value === undefined) return null;
-  
-  if (value instanceof Date) {
-    return isNaN(value.getTime()) ? null : value;
-  }
-  
-  if (typeof value === 'object' && value !== null) {
-    if (typeof (value as any).toDate === 'function') {
-      try {
-        const d = (value as any).toDate();
-        return d instanceof Date && !isNaN(d.getTime()) ? d : null;
-      } catch {
-        return null;
-      }
-    }
-    if (typeof (value as any).seconds === 'number') {
-      const d = new Date((value as any).seconds * 1000);
-      return isNaN(d.getTime()) ? null : d;
-    }
-  }
-  
-  if (typeof value === 'number') {
-    if (isNaN(value) || value <= 0) return null;
-    const d = new Date(value);
-    return isNaN(d.getTime()) ? null : d;
-  }
-  
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    const d = new Date(trimmed);
-    return isNaN(d.getTime()) ? null : d;
-  }
-  
-  return null;
-}
-
-/**
- * Determina la fecha efectiva de actividad de una conversación siguiendo la prioridad:
- * 1. lastMessageTimestamp
- * 2. updatedAt
- * 3. createdAt
- */
-export function getEffectiveActivityTimestamp(data: Record<string, any>): Date | null {
-  if (!data || typeof data !== 'object') return null;
-  
-  const lastMsg = toValidDate(data.lastMessageTimestamp);
-  if (lastMsg) return lastMsg;
-  
-  const updated = toValidDate(data.updatedAt);
-  if (updated) return updated;
-  
-  const created = toValidDate(data.createdAt);
-  if (created) return created;
-  
-  return null;
-}
 
 /**
  * Función para sincronizar de forma segura el rol de usuario con Custom Claims.
@@ -99,96 +30,97 @@ export const syncUserRole = onDocumentWritten(
   async (event) => {
     const change = event.data;
     const userId = event.params.userId;
-    const newData = change.after.exists ? change.after.data() : null;
-    const oldData = change.before.exists ? change.before.data() : null;
+  const newData = change.after.exists ? change.after.data() : null;
+  const oldData = change.before.exists ? change.before.data() : null;
 
+  try {
+    let userRecord: admin.auth.UserRecord;
     try {
-      let userRecord: admin.auth.UserRecord;
-      try {
-        userRecord = await admin.auth().getUser(userId);
-      } catch (authError: any) {
-        if (authError.code === 'auth/user-not-found') {
-          console.log(`[syncUserRole] Usuario ${userId} no existe en Auth.`);
-          return;
-        }
-        throw authError;
-      }
-
-      const existingClaims = userRecord.customClaims || {};
-
-      // Si el documento de usuario fue eliminado en Firestore, revocar/limpiar claims administrativas
-      if (!newData) {
-        console.log(`[syncUserRole] Documento firestore_users/${userId} eliminado. Revocando claims privilegiadas.`);
-        const cleanedClaims = {
-          ...existingClaims,
-          role: 'student',
-          isAdmin: false,
-          isApprovedForTutoring: false
-        };
-        await admin.auth().setCustomUserClaims(userId, cleanedClaims);
+      userRecord = await admin.auth().getUser(userId);
+    } catch (authError: any) {
+      if (authError.code === 'auth/user-not-found') {
+        console.log(`[syncUserRole] Usuario ${userId} no existe en Auth.`);
         return;
       }
-
-      let targetRole = newData.role || 'student';
-      let isApprovedForTutoring = Boolean(newData.isApprovedForTutoring);
-      let isAdmin = Boolean(newData.isAdmin);
-
-      const wasAdmin = oldData?.role === 'admin' || oldData?.isAdmin === true || existingClaims.role === 'admin';
-      const wasTeacher = oldData?.role === 'teacher' || existingClaims.role === 'teacher' || wasAdmin;
-      const wasApproved = oldData?.isApprovedForTutoring === true || existingClaims.isApprovedForTutoring === true || wasAdmin;
-
-      // 1. Protección contra escalación a admin desde escritura cliente
-      if (targetRole === 'admin' || isAdmin) {
-        if (!wasAdmin) {
-          console.warn(`[syncUserRole] Bloqueada escalación no autorizada a admin para ${userId}`);
-          targetRole = oldData?.role || existingClaims.role || 'student';
-          isAdmin = false;
-        } else {
-          isAdmin = true;
-        }
-      }
-
-      // 2. Protección contra escalación a teacher desde escritura cliente (student -> teacher requiere backend/Admin SDK)
-      if (targetRole === 'teacher') {
-        if (!wasTeacher) {
-          console.warn(`[syncUserRole] Bloqueada escalación no autorizada a teacher para ${userId}. Debe ser aprobada por admin.`);
-          targetRole = oldData?.role || existingClaims.role || 'student';
-        }
-      }
-
-      // 3. Protección contra auto-aprobación de tutoría desde escritura cliente
-      if (targetRole === 'teacher' && isApprovedForTutoring) {
-        if (!wasApproved) {
-          console.warn(`[syncUserRole] Bloqueada auto-aprobación de tutoría para ${userId}`);
-          isApprovedForTutoring = false;
-        }
-      }
-
-      const updatedClaims = {
-        ...existingClaims,
-        role: targetRole,
-        isAdmin: targetRole === 'admin' || isAdmin,
-        isApprovedForTutoring: targetRole === 'admin' ? true : (targetRole === 'teacher' ? isApprovedForTutoring : false)
-      };
-
-      await admin.auth().setCustomUserClaims(userId, updatedClaims);
-      console.log(`[syncUserRole] Custom claims actualizados con éxito para ${userId}:`, updatedClaims);
-    } catch (err) {
-      console.error(`[syncUserRole] Error al actualizar custom claims para ${userId}:`, err);
+      throw authError;
     }
+
+    const existingClaims = userRecord.customClaims || {};
+
+    // Si el documento de usuario fue eliminado en Firestore, revocar/limpiar claims administrativas
+    if (!newData) {
+      console.log(`[syncUserRole] Documento firestore_users/${userId} eliminado. Revocando claims privilegiadas.`);
+      const cleanedClaims = {
+        ...existingClaims,
+        role: 'student',
+        isAdmin: false,
+        isApprovedForTutoring: false
+      };
+      await admin.auth().setCustomUserClaims(userId, cleanedClaims);
+      return;
+    }
+
+    let targetRole = newData.role || 'student';
+    let isApprovedForTutoring = Boolean(newData.isApprovedForTutoring);
+    let isAdmin = Boolean(newData.isAdmin);
+
+    const wasAdmin = oldData?.role === 'admin' || oldData?.isAdmin === true || existingClaims.role === 'admin';
+    const wasTeacher = oldData?.role === 'teacher' || existingClaims.role === 'teacher' || wasAdmin;
+    const wasApproved = oldData?.isApprovedForTutoring === true || existingClaims.isApprovedForTutoring === true || wasAdmin;
+
+    // 1. Protección contra escalación a admin desde escritura cliente
+    if (targetRole === 'admin' || isAdmin) {
+      if (!wasAdmin) {
+        console.warn(`[syncUserRole] Bloqueada escalación no autorizada a admin para ${userId}`);
+        targetRole = oldData?.role || existingClaims.role || 'student';
+        isAdmin = false;
+      } else {
+        isAdmin = true;
+      }
+    }
+
+    // 2. Protección contra escalación a teacher desde escritura cliente (student -> teacher requiere backend/Admin SDK)
+    if (targetRole === 'teacher') {
+      if (!wasTeacher) {
+        console.warn(`[syncUserRole] Bloqueada escalación no autorizada a teacher para ${userId}. Debe ser aprobada por admin.`);
+        targetRole = oldData?.role || existingClaims.role || 'student';
+      }
+    }
+
+    // 3. Protección contra auto-aprobación de tutoría desde escritura cliente
+    if (targetRole === 'teacher' && isApprovedForTutoring) {
+      if (!wasApproved) {
+        console.warn(`[syncUserRole] Bloqueada auto-aprobación de tutoría para ${userId}`);
+        isApprovedForTutoring = false;
+      }
+    }
+
+    const updatedClaims = {
+      ...existingClaims,
+      role: targetRole,
+      isAdmin: targetRole === 'admin' || isAdmin,
+      isApprovedForTutoring: targetRole === 'admin' ? true : (targetRole === 'teacher' ? isApprovedForTutoring : false)
+    };
+
+    await admin.auth().setCustomUserClaims(userId, updatedClaims);
+    console.log(`[syncUserRole] Custom claims actualizados con éxito para ${userId}:`, updatedClaims);
+  } catch (err) {
+    console.error(`[syncUserRole] Error al actualizar custom claims para ${userId}:`, err);
   }
-);
+});
 
 /**
  * Callable Function exclusiva para Administradores verificados para asignar roles o aprobar profesores.
- * La autorización depende strictly del Custom Claim role === 'admin'.
+ * La autorización depende estrictamente del Custom Claim role === 'admin'.
  */
 export const adminSetUserClaims = functions.region("europe-west1").https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError("unauthenticated", "Se requiere autenticación.");
   }
+
   const callerClaims = (context.auth.token || {}) as any;
   const isCallerAdmin = callerClaims.role === 'admin';
+
   if (!isCallerAdmin) {
     console.warn(`[adminSetUserClaims] Intento de acceso no autorizado por UID: ${context.auth.uid}`);
     throw new functions.https.HttpsError("permission-denied", "Solo un administrador con claim verificado puede modificar permisos de usuario.");
@@ -217,17 +149,16 @@ export const adminSetUserClaims = functions.region("europe-west1").https.onCall(
     await admin.auth().setCustomUserClaims(targetUid, newClaims);
     console.log(`[adminSetUserClaims] Admin ${context.auth.uid} actualizó claims para ${targetUid}:`, newClaims);
 
-    // Sincronizar también en Firestore utilizando la instancia centralizada
+    // Sincronizar también en Firestore utilizando Admin SDK
+    const db = admin.firestore();
     const updateData: any = {
       role: role,
-      updatedAt: FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedByAdminUid: context.auth.uid
     };
-
     if (role === 'teacher') {
       updateData.isApprovedForTutoring = Boolean(isApprovedForTutoring);
     }
-
     if (role === 'admin') {
       updateData.isAdmin = true;
       updateData.isApprovedForTutoring = true;
@@ -272,7 +203,7 @@ export const callTutorAI = functions.region("europe-west1").https.onCall(async (
       },
     });
   }
-
+  
   const contents = [...formattedHistory, { role: "user", parts: lastMessageParts }] as any;
 
   try {
@@ -297,7 +228,7 @@ export const callSimpleAI = functions.region("europe-west1").https.onCall(async 
     if (!context.auth) {
         throw new functions.https.HttpsError("unauthenticated", "El usuario debe estar autenticado.");
     }
-
+    
     const prompt = data.prompt;
     if (!prompt || typeof prompt !== 'string') {
         throw new functions.https.HttpsError("invalid-argument", "Se requiere un prompt de texto.");
@@ -334,94 +265,71 @@ export const scheduledChatRetentionCleanup = onSchedule(
   },
   async (event) => {
     console.log(`[scheduledChatRetentionCleanup] Iniciando tarea de retención de chats (límite: ${CHAT_RETENTION_DAYS} días).`);
+    const db = admin.firestore();
     const threshold = new Date();
     threshold.setDate(threshold.getDate() - CHAT_RETENTION_DAYS);
-    
     let deletedConversationsCount = 0;
     let deletedMessagesCount = 0;
 
-    const parentCollections = [
+    const collectionsToCheck = [
       "chats",
       "conversations",
       "firestore_conversations",
       "firestore_peer_conversations",
       "firestore_teacher_conversations"
     ];
-    
-    const legacyCollections = [
-      'firestore_direct_messages', 
-      'firestore_peer_messages', 
-      'firestore_teacher_messages', 
-      'firestore_course_messages'
-    ];
-
-    const parentDateFields = ['lastMessageTimestamp', 'updatedAt', 'createdAt'];
-    
-    const processedChats = new Set<string>();
-    const processedOrphans = new Set<string>();
 
     try {
-      // ---------------------------------------------------------
-      // FASE 1: Limpieza de conversaciones padre (verificando la fecha efectiva de actividad)
-      // ---------------------------------------------------------
-      for (const colName of parentCollections) {
+      const bulkWriter = db.bulkWriter();
+      bulkWriter.onWriteError((error) => {
+        if (error.failedAttempts < 3) {
+          return true; // Retry up to 3 times
+        }
+        console.warn('BulkWriter error:', error);
+        return false;
+      });
+
+      for (const colName of collectionsToCheck) {
         const colRef = db.collection(colName);
         
-        for (const dateField of parentDateFields) {
-          let hasMore = true;
-          let lastDoc: DocumentSnapshot | null = null;
+        // Paginating through the collection by querying where lastMessageTimestamp < threshold
+        // To be safe with possible missing fields or different timestamp types, we will just use 
+        // a basic query on lastMessageTimestamp if possible, but the schema might not be uniform.
+        // Let's get all documents incrementally in chunks using limit() to prevent OOM
+        let lastDoc = null;
+        let hasMore = true;
+        while (hasMore) {
+          let q = colRef.limit(500);
+          if (lastDoc) {
+            q = q.startAfter(lastDoc);
+          }
+          const snapshot = await q.get().catch(() => null);
+          if (!snapshot || snapshot.empty) {
+            hasMore = false;
+            break;
+          }
+          lastDoc = snapshot.docs[snapshot.docs.length - 1];
 
-          while (hasMore) {
-            let q = colRef.where(dateField, '<', threshold)
-                          .orderBy(dateField)
-                          .limit(500);
+          for (const docSnap of snapshot.docs) {
+            const data = docSnap.data();
+            const timestampVal = data.lastMessageTimestamp || data.updatedAt || data.createdAt;
+            let dateToCheck = null;
 
-            if (lastDoc) {
-              q = q.startAfter(lastDoc);
+            if (timestampVal) {
+              if (typeof timestampVal.toDate === 'function') {
+                dateToCheck = timestampVal.toDate();
+              } else if (timestampVal instanceof Date) {
+                dateToCheck = timestampVal;
+              } else if (typeof timestampVal === 'number' || typeof timestampVal === 'string') {
+                dateToCheck = new Date(timestampVal);
+              }
             }
 
-            const snapshot = await q.get().catch((err) => {
-              console.error(`[scheduledChatRetentionCleanup] Query error on ${colName} (${dateField}):`, err);
-              return null;
-            });
-
-            if (!snapshot || snapshot.empty) {
-              hasMore = false;
-              break;
-            }
-
-            lastDoc = snapshot.docs[snapshot.docs.length - 1];
-
-            const bulkWriter = db.bulkWriter();
-            bulkWriter.onWriteError((error) => {
-              if (error.failedAttempts < 3) return true;
-              return false;
-            });
-
-            for (const docSnap of snapshot.docs) {
+            if (dateToCheck && dateToCheck < threshold) {
               const chatId = docSnap.id;
-              const globalId = `${colName}/${chatId}`;
+              console.log(`[scheduledChatRetentionCleanup] Chat caducado detectado en ${colName}/${chatId} (actividad: ${dateToCheck.toISOString()})`);
               
-              if (processedChats.has(globalId)) {
-                continue;
-              }
-              processedChats.add(globalId);
-
-              const data = docSnap.data();
-              const effectiveDate = getEffectiveActivityTimestamp(data);
-
-              const dateToCheck = effectiveDate;
-              // REGLA F80.50.2: Solo eliminar si la FECHA EFECTIVA DE ACTIVIDAD es anterior al umbral
-              if (!dateToCheck || dateToCheck >= threshold) {
-                console.log(`[scheduledChatRetentionCleanup] Chat ${globalId} OMITIDO. Actividad efectiva reciente (${dateToCheck ? dateToCheck.toISOString() : 'sin fecha válida'}).`);
-                continue;
-              }
-
-              if (dateToCheck < threshold) {
-                console.log(`[scheduledChatRetentionCleanup] Chat caducado CONFIRMADO en ${globalId} (fecha efectiva: ${dateToCheck.toISOString()})`);
-              }
-              
-              // 1. Eliminar subcolecciones canónicas
+              // 1. Eliminar subcolecciones (messages, signal, documents)
               const subcols = ['messages', 'signal', 'documents'];
               for (const subcol of subcols) {
                 const subRef = db.collection(colName).doc(chatId).collection(subcol);
@@ -434,15 +342,14 @@ export const scheduledChatRetentionCleanup = onSchedule(
                 }
               }
               
-              // 2. Eliminar referencias huérfanas vinculadas a este chat (Caso A)
+              // 2. Eliminar referencias huérfanas en legacy
               const targetIds = [chatId, chatId.replace(/^direct_/, ''), `direct_${chatId}`];
+              const legacyCollections = ['firestore_direct_messages', 'firestore_peer_messages', 'firestore_teacher_messages', 'firestore_course_messages'];
               for (const legacyCol of legacyCollections) {
                 for (const tid of targetIds) {
                   const legacySnap = await db.collection(legacyCol).where('conversationId', '==', tid).get().catch(() => null);
                   if (legacySnap && !legacySnap.empty) {
                     for (const mDoc of legacySnap.docs) {
-                      const mGlobalId = `${legacyCol}/${mDoc.id}`;
-                      processedOrphans.add(mGlobalId);
                       bulkWriter.delete(mDoc.ref);
                       deletedMessagesCount++;
                     }
@@ -450,82 +357,23 @@ export const scheduledChatRetentionCleanup = onSchedule(
                 }
               }
 
-              // 3. Eliminar documento de la conversación padre
+              // 3. Eliminar documento de la conversación
               bulkWriter.delete(docSnap.ref);
               deletedConversationsCount++;
             }
-
-            await bulkWriter.close();
           }
         }
       }
-
-      // ---------------------------------------------------------
-      // FASE 2: Limpieza de mensajes legacy huérfanos (Caso B, usando createdAt)
-      // ---------------------------------------------------------
-      for (const legacyCol of legacyCollections) {
-        const legacyRef = db.collection(legacyCol);
-        let hasMore = true;
-        let lastDoc: DocumentSnapshot | null = null;
-
-        while (hasMore) {
-          let q = legacyRef.where('createdAt', '<', threshold)
-                           .orderBy('createdAt')
-                           .limit(500);
-
-          if (lastDoc) {
-            q = q.startAfter(lastDoc);
-          }
-
-          const snapshot = await q.get().catch((err) => {
-            console.error(`[scheduledChatRetentionCleanup] Query error on orphans ${legacyCol} (createdAt):`, err);
-            return null;
-          });
-
-          if (!snapshot || snapshot.empty) {
-            hasMore = false;
-            break;
-          }
-
-          lastDoc = snapshot.docs[snapshot.docs.length - 1];
-
-          const bulkWriter = db.bulkWriter();
-          bulkWriter.onWriteError((error) => {
-            if (error.failedAttempts < 3) return true;
-            return false;
-          });
-
-          for (const docSnap of snapshot.docs) {
-            const msgId = docSnap.id;
-            const globalId = `${legacyCol}/${msgId}`;
-            
-            if (processedOrphans.has(globalId)) {
-              continue;
-            }
-            processedOrphans.add(globalId);
-
-            const data = docSnap.data();
-            const msgDate = toValidDate(data.createdAt || data.timestamp);
-            if (!msgDate || msgDate >= threshold) {
-              continue;
-            }
-
-            bulkWriter.delete(docSnap.ref);
-            deletedMessagesCount++;
-          }
-
-          await bulkWriter.close();
-        }
-      }
-
+      
+      await bulkWriter.close();
       console.log(`[scheduledChatRetentionCleanup] Tarea finalizada con éxito. Conversaciones borradas: ${deletedConversationsCount}, Mensajes/Docs borrados: ${deletedMessagesCount}`);
       return { success: true, deletedConversationsCount, deletedMessagesCount };
     } catch (error) {
       console.error("[scheduledChatRetentionCleanup] Error crítico en tarea programada:", error);
       throw error;
     }
-  }
-);
+  });
+
 
 /**
  * Callable Function: adminClearChatMessages
@@ -540,12 +388,13 @@ export const adminClearChatMessages = functions.region("europe-west1").https.onC
   if (!isCallerAdmin) {
     throw new functions.https.HttpsError("permission-denied", "Operación exclusiva para administradores.");
   }
-
+  
   const { conversationId } = data;
   if (!conversationId) {
     throw new functions.https.HttpsError("invalid-argument", "Se requiere conversationId.");
   }
 
+  const db = admin.firestore();
   let deletedMessagesCount = 0;
   try {
     const bulkWriter = db.bulkWriter();
@@ -553,10 +402,12 @@ export const adminClearChatMessages = functions.region("europe-west1").https.onC
       if (error.failedAttempts < 3) return true;
       return false;
     });
-
+    
+    // Identificadores posibles
     const targetIds = [conversationId, conversationId.replace(/^direct_/, ''), `direct_${conversationId}`];
-
+    
     for (const tid of targetIds) {
+      // Limpiar subcolecciones
       const subcollections = ['messages', 'signal', 'documents'];
       for (const colName of ["chats", "conversations", "firestore_conversations", "firestore_peer_conversations", "firestore_teacher_conversations"]) {
         for (const subcol of subcollections) {
@@ -570,7 +421,8 @@ export const adminClearChatMessages = functions.region("europe-west1").https.onC
         }
       }
     }
-
+    
+    // Limpiar colecciones legacy
     const legacyCollections = ['firestore_direct_messages', 'firestore_peer_messages', 'firestore_teacher_messages', 'firestore_course_messages'];
     for (const legacyCol of legacyCollections) {
       for (const tid of targetIds) {
@@ -583,21 +435,25 @@ export const adminClearChatMessages = functions.region("europe-west1").https.onC
         }
       }
     }
-
+    
+    // Actualizar metadatos de conversación padre para quitar lastMessageText
     for (const colName of ["chats", "conversations", "firestore_conversations", "firestore_peer_conversations", "firestore_teacher_conversations"]) {
       for (const tid of targetIds) {
+        // En lugar de borrar la conversación, la limpiamos
         const convRef = db.collection(colName).doc(tid);
         bulkWriter.update(convRef, {
           lastMessageText: '',
+          // Mantenemos lastMessageTimestamp para que la política de retención la elimine naturalmente
         });
       }
     }
-
+    
     await bulkWriter.close();
-
+    
     return { success: true, clearedCount: deletedMessagesCount };
   } catch (err: any) {
     console.error("[adminClearChatMessages] Error:", err);
     throw new functions.https.HttpsError("internal", err.message || "Error al vaciar chat.");
   }
 });
+

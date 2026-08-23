@@ -757,6 +757,7 @@ service cloud.firestore {
     }
 
     match /firestore_direct_messages/{msgId} {
+      // allow read, write: if isVerifiedUser()
       allow read, create: if isVerifiedUser() && (
         isAdmin() ||
         isDirectChatIdForUser(msgId) ||
