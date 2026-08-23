@@ -2064,15 +2064,16 @@ export const dbFetchConversations = (): Conversation[] => {
         }
     }
 
-    // 1. Ensure all students have a general Support/Admin conversation entry (id: studentId) if not closed
+    // 1. Ensure all students have a general Support/Admin conversation entry (id: support_<studentId>) if not closed
     (usersData || []).forEach(u => {
         const isStudentRole = u.role === 'student' || !(u as any).role;
         if (isStudentRole && u.id && u.id !== 'direct') {
-            const isClosed = isConversationClosed(u.id);
-            const exists = conversationsData.some(c => c.id.replace(/^direct_/, '') === u.id);
+            const supportId = `support_${u.id}`;
+            const isClosed = isConversationClosed(supportId) || isConversationClosed(u.id);
+            const exists = conversationsData.some(c => c.id === supportId || c.id === u.id || c.id.replace(/^direct_/, '') === u.id);
             if (!exists && !isClosed) {
                 const newConvo: Conversation = {
-                    id: u.id,
+                    id: supportId,
                     studentId: u.id,
                     studentName: u.name,
                     lastMessageText: 'Canal de dudas y asistencia del estudiante',
@@ -2269,6 +2270,27 @@ export const dbDeleteMessage = (messageId: string): { success: boolean; conversa
     }
     eventEmitter.emit('message-update', { id: messageId, deleted: true, conversationId } as any);
     return { success: true, conversationId };
+};
+
+export const dbClearChatMessages = (conversationId: string): { success: boolean; clearedCount: number } => {
+    if (!conversationId) return { success: false, clearedCount: 0 };
+    const cleanId = conversationId.replace(/^direct_/, '').replace(/^peer_/, '');
+    let clearedCount = 0;
+    for (let i = directMessagesData.length - 1; i >= 0; i--) {
+        const m = directMessagesData[i];
+        const mConvoId = (m.conversationId || '').replace(/^direct_/, '').replace(/^peer_/, '');
+        if (m.conversationId === conversationId || mConvoId === cleanId || mConvoId.includes(cleanId)) {
+            directMessagesData.splice(i, 1);
+            clearedCount++;
+        }
+    }
+    const convo = conversationsData.find(c => c.id === conversationId || c.id.replace(/^direct_/, '') === cleanId);
+    if (convo) {
+        convo.lastMessageText = 'Chat limpiado';
+        convo.lastMessageTimestamp = new Date().toISOString();
+    }
+    eventEmitter.emit('messages-cleared', { conversationId });
+    return { success: true, clearedCount };
 };
 
 export const dbMarkConversationAsRead = (conversationId: string, role?: string): void => {
@@ -2806,56 +2828,7 @@ export const dbSearchStudents = (studentId: string, searchVal: string): (Student
 
 // --- STUDENT COURSE GROUP CHATS ---
 
-export let courseGroupMessagesData: CourseGroupMessage[] = [
-    {
-        id: 'gmsg_1',
-        courseId: 'bach_2_ciencias',
-        senderId: 'student3', // Sofía
-        senderName: 'Sofía R.',
-        text: '¡Hola a todos! ¿Alguien ha resuelto el ejercicio de Química Orgánica del Bloque 3?',
-        timestamp: new Date(Date.now() - 3600000 * 3).toISOString()
-    },
-    {
-        id: 'gmsg_2',
-        courseId: 'bach_2_ciencias',
-        senderId: 'student1', // Lucía
-        senderName: 'Lucía G.',
-        text: '¡Hola Sofía! Sí, justamente lo subí al foro. ¿Qué duda tienes con la nomenclatura?',
-        timestamp: new Date(Date.now() - 3600000 * 2.8).toISOString()
-    },
-    {
-        id: 'gmsg_3',
-        courseId: 'bach_2_ciencias',
-        senderId: 'student3', // Sofía
-        senderName: 'Sofía R.',
-        text: 'No me queda claro qué prioridad tiene el grupo alcohol (-OH) frente a un aldehído.',
-        timestamp: new Date(Date.now() - 3600000 * 2.5).toISOString()
-    },
-    {
-        id: 'gmsg_4',
-        courseId: 'bach_2_ciencias',
-        senderId: 'student1', // Lucía
-        senderName: 'Lucía G.',
-        text: 'Los aldehídos siempre tienen superioridad sobre los alcoholes. El alcohol pasaría a nombrarse como hidroxi- y el aldehído daría la terminación -al.',
-        timestamp: new Date(Date.now() - 3600000 * 2).toISOString()
-    },
-    {
-        id: 'gmsg_5',
-        courseId: 'ebau',
-        senderId: 'student1', // Lucía
-        senderName: 'Lucía G.',
-        text: '¿Saben cuándo publican las fechas oficiales de la EBAU en la web de la universidad?',
-        timestamp: new Date(Date.now() - 3600000 * 5).toISOString()
-    },
-    {
-        id: 'gmsg_6',
-        courseId: 'ebau',
-        senderId: 'student3', // Sofía
-        senderName: 'Sofía R.',
-        text: 'Suelen salir a principios de mes, pero normalmente los exámenes son a mediados de Junio. ¡Que no cunda el pánico! 🚀',
-        timestamp: new Date(Date.now() - 3600000 * 4).toISOString()
-    }
-];
+export let courseGroupMessagesData: CourseGroupMessage[] = [];
 
 export const dbFetchCourseGroupConversations = (studentId: string): CourseGroupConversation[] => {
     const student = usersData.find(u => u.id === studentId);

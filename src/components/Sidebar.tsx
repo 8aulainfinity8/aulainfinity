@@ -26,9 +26,10 @@ interface NavItemProps {
     isSidebarOpen: boolean;
     onItemClick: () => void;
     badgeCount?: number;
+    state?: any;
 }
 
-const NavItem: React.FC<NavItemProps> = React.memo(({ to, icon, label, isSidebarOpen, onItemClick, badgeCount }) => {
+const NavItem: React.FC<NavItemProps> = React.memo(({ to, icon, label, isSidebarOpen, onItemClick, badgeCount, state }) => {
     const navigate = useNavigate();
     const location = useLocation();
 
@@ -38,13 +39,14 @@ const NavItem: React.FC<NavItemProps> = React.memo(({ to, icon, label, isSidebar
         const isResettableLink = to.startsWith('/app/course/') || to.startsWith('/app/bach/');
         if (isResettableLink && location.pathname === to) {
             e.preventDefault();
-            navigate(to, { state: { refresh: Date.now() } });
+            navigate(to, { state: { refresh: Date.now(), ...(state || {}) } });
         }
     };
     
     return (
         <NavLink
             to={to}
+            state={state}
             end
             onClick={handleClick}
             className={({ isActive }) =>
@@ -286,7 +288,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ sidebarState, onItemClick }) =
                                 {(isAdmin || ((appConfig?.aiEnabled !== false) && ((user as any)?.aiEnabled !== false))) && (
                                     <NavItem to={ROUTES.TUTOR_IA} icon={<SparklesIcon className="w-6 h-6 text-amber-500 dark:text-amber-400" />} label={t('sidebar.aiTutor')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} />
                                 )}
-                                <NavItem to={ROUTES.STUDY_GROUPS} icon={<UserGroupIcon className="w-6 h-6 text-pink-500 dark:text-pink-400" />} label={t('sidebar.studyGroups')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} />
+                                <NavItem to={ROUTES.STUDY_GROUPS} icon={<UserGroupIcon className="w-6 h-6 text-pink-500 dark:text-pink-400" />} label={t('sidebar.studyGroups')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} state={{ activeChatType: 'group' }} />
                                 <NavItem to={ROUTES.STUDENT_CHAT} icon={<ChatBubbleLeftRightIcon className="w-6 h-6 text-indigo-500 dark:text-indigo-400" />} label={t('sidebar.studentChat')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} badgeCount={unreadPeerCount} />
                                 <NavItem to={ROUTES.CHAT} icon={<ChatBubbleLeftRightIcon className="w-6 h-6" />} label={t('sidebar.adminChat')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} badgeCount={unreadSupportCount} />
                                 <NavItem to={ROUTES.TUTORING} icon={<VideoCameraIcon className="w-6 h-6" />} label={t('sidebar.tutoring')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} />

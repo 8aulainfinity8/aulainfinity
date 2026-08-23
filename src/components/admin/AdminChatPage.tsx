@@ -19,6 +19,7 @@ import { ManageStudentsModal } from './ManageStudentsModal';
 import { db, auth } from '../../services/firebase';
 import { doc, onSnapshot, collection, updateDoc, setDoc, getDocs, writeBatch, deleteDoc } from 'firebase/firestore';
 import { eventEmitter } from '../../services/eventService';
+import { getDirectChatId, resolveUserUid, parseDirectChatId, parseSupportChatId } from '../../utils/chatUtils';
 
 // --- SUB-COMPONENTS ---
 
@@ -315,6 +316,27 @@ export const AdminChatPage: React.FC = () => {
     const [showWhiteboard, setShowWhiteboard] = useState(false);
     const [showResolveConfirmModal, setShowResolveConfirmModal] = useState(false);
     const [isClosingDuda, setIsClosingDuda] = useState(false);
+    const [showClearChatModal, setShowClearChatModal] = useState(false);
+    const [isClearingChat, setIsClearingChat] = useState(false);
+
+    const handleClearChat = async () => {
+        if (!selectedConversationId) return;
+        setIsClearingChat(true);
+        try {
+            await api.clearChatMessages(selectedConversationId);
+            queryClient.invalidateQueries({ queryKey: ['messages', selectedConversationId] });
+            queryClient.invalidateQueries({ queryKey: ['groupMessages', selectedConversationId] });
+            queryClient.invalidateQueries({ queryKey: ['peerMessages', selectedConversationId] });
+            queryClient.invalidateQueries({ queryKey: ['teacherMessages', selectedConversationId] });
+            queryClient.invalidateQueries({ queryKey: ['conversations'] });
+            queryClient.invalidateQueries({ queryKey: ['groupConversations'] });
+            setShowClearChatModal(false);
+        } catch (err) {
+            console.error('Error clearing chat:', err);
+        } finally {
+            setIsClearingChat(false);
+        }
+    };
 
     const handleConfirmResolveDuda = async () => {
         if (!selectedConversationId) return;
@@ -653,18 +675,20 @@ export const AdminChatPage: React.FC = () => {
             const studentUsers = (allUsers || []).filter(u => u && (u.role === 'student' || !(u as any).role)) as StudentUser[];
             
             let assignedStudents = studentUsers;
-            if (isTeacher && user?.id) {
+            const teacherUid = isTeacher && user?.id ? resolveUserUid(user) : '';
+            if (isTeacher && teacherUid) {
                 assignedStudents = studentUsers.filter(s => {
                     if (!s || !s.id) return false;
-                    if (s.assignedTeacherId === user.id) return true;
-                    if (s.assignedTeacherName && user.name && s.assignedTeacherName.toLowerCase() === user.name.toLowerCase()) return true;
+                    const studentUid = resolveUserUid(s);
+                    if (s.assignedTeacherId === teacherUid || s.assignedTeacherId === user?.id) return true;
+                    if (s.assignedTeacherName && user?.name && s.assignedTeacherName.toLowerCase() === user.name.toLowerCase()) return true;
+                    const directConvoId = getDirectChatId(studentUid, teacherUid);
                     const hasTeacherConvo = (conversations || []).some(c => {
                         if (!c || !c.id) return false;
-                        const cleanCId = c.id.replace(/^direct_/, '');
                         return (
-                            cleanCId === `${s.id}_${user.id}` ||
-                            cleanCId.startsWith(`${s.id}_${user.id}`) ||
-                            (c.studentId === s.id && (c.teacherId === user.id || cleanCId.includes(user.id)))
+                            c.id === directConvoId ||
+                            c.id === `${studentUid}_${teacherUid}` ||
+                            (c.studentId === studentUid && (c.teacherId === teacherUid || c.id.includes(teacherUid)))
                         );
                     });
                     return hasTeacherConvo;
@@ -672,37 +696,39 @@ export const AdminChatPage: React.FC = () => {
             }
 
             return assignedStudents.map(student => {
-                const defaultConvoId = isTeacher && user?.id ? `${student.id}_${user.id}` : student.id;
+                const studentUid = resolveUserUid(student);
+                const defaultConvoId = isTeacher && teacherUid ? getDirectChatId(studentUid, teacherUid) : studentUid;
+                const canonicalId = isTeacher && teacherUid ? getDirectChatId(studentUid, teacherUid) : studentUid;
+                const legacyId = isTeacher && teacherUid ? `${studentUid}_${teacherUid}` : studentUid;
+
                 const existingConvo = (conversations || []).find(c => {
                     if (!c || !c.id) return false;
-                    const cleanCId = c.id.replace(/^direct_/, '');
-                    if (isTeacher && user?.id) {
+                    if (isTeacher && teacherUid) {
                         return (
-                            cleanCId === `${student.id}_${user.id}` ||
-                            cleanCId.startsWith(`${student.id}_${user.id}`) ||
-                            c.id === `${student.id}_${user.id}` ||
-                            c.id === `direct_${student.id}_${user.id}` ||
-                            (c.studentId === student.id && (c.teacherId === user.id || cleanCId.includes(user.id)))
+                            c.id === canonicalId ||
+                            c.id === legacyId ||
+                            (c.studentId === studentUid && (c.teacherId === teacherUid || c.id.includes(teacherUid)))
                         );
                     } else {
+                        const cleanCId = c.id.replace(/^direct_/, '');
                         return (
-                            cleanCId === student.id ||
-                            c.studentId === student.id ||
-                            cleanCId.startsWith(`${student.id}_`)
+                            cleanCId === studentUid ||
+                            c.studentId === studentUid ||
+                            cleanCId.startsWith(`${studentUid}_`)
                         );
                     }
                 });
 
-                const finalConvoId = existingConvo ? existingConvo.id : defaultConvoId;
+                const finalConvoId = canonicalId;
 
                 return {
                     id: finalConvoId,
-                    studentId: student.id,
+                    studentId: studentUid,
                     studentName: student.name,
                     studentEmail: student.email + (student.assignedTeacherName ? ` • Tutor: ${student.assignedTeacherName}` : ' • Alumno 1a1'),
                     lastMessageText: existingConvo ? existingConvo.lastMessageText : 'Canal por Alumnos • Sin mensajes aún',
                     lastMessageTimestamp: existingConvo ? existingConvo.lastMessageTimestamp : (student.registrationDate || new Date().toISOString()),
-                    teacherId: existingConvo?.teacherId || student.assignedTeacherId || (isTeacher ? user?.id : undefined),
+                    teacherId: existingConvo?.teacherId || student.assignedTeacherId || (isTeacher ? teacherUid : undefined),
                     teacherName: existingConvo?.teacherName || student.assignedTeacherName || (isTeacher ? user?.name : undefined),
                     unreadByTeacher: existingConvo?.unreadByTeacher || false,
                     unreadByAdmin: existingConvo?.unreadByAdmin || false
@@ -756,15 +782,22 @@ export const AdminChatPage: React.FC = () => {
             if (location.state?.activeChatType) {
                 setActiveTab(location.state.activeChatType);
             }
-            const targetConvo = sortedConversations.find(c => c.studentId === studentQueryId || c.id === studentQueryId || c.id.includes(studentQueryId));
-            if (targetConvo) {
-                setSelectedConversationId(targetConvo.id);
+            if (isTeacher && user?.id) {
+                const teacherUid = resolveUserUid(user);
+                const studentUid = resolveUserUid(studentQueryId);
+                const canonicalId = getDirectChatId(studentUid, teacherUid);
+                setSelectedConversationId(canonicalId);
             } else {
-                setSelectedConversationId(studentQueryId);
+                const targetConvo = sortedConversations.find(c => c.studentId === studentQueryId || c.id === studentQueryId || c.id.includes(studentQueryId));
+                if (targetConvo) {
+                    setSelectedConversationId(targetConvo.id);
+                } else {
+                    setSelectedConversationId(studentQueryId);
+                }
             }
             setSearchParams({}, { replace: true });
         }
-    }, [studentQueryId, setSearchParams, sortedConversations, location.state]);
+    }, [studentQueryId, setSearchParams, sortedConversations, location.state, isTeacher, user]);
 
     const activeConversation = useMemo(() => {
         if (activeTab === 'group') return groupConversations?.find(c => c.id === selectedConversationId) || null;
@@ -828,8 +861,26 @@ export const AdminChatPage: React.FC = () => {
         return conversations?.find(c => c.id === selectedConversationId) || null;
     }, [conversations, groupConversations, peerConversations, selectedConversationId, activeTab, allUsers, teachers, sortedConversations]);
 
-    const effectiveConvoId = activeConversation?.id || selectedConversationId;
-    const { messages: unifiedMessages, loading: loadingUnifiedMessages, sendMessage, markAsRead, editMessage, deleteMessage } = useChat(effectiveConvoId, user?.id || null);
+    const rawEffectiveConvoId = activeConversation?.id || selectedConversationId;
+    const effectiveConvoId = rawEffectiveConvoId && !rawEffectiveConvoId.includes('_') && !rawEffectiveConvoId.startsWith('support_') && !rawEffectiveConvoId.startsWith('group_') && !rawEffectiveConvoId.startsWith('sala_') && !rawEffectiveConvoId.startsWith('teacher_') && !rawEffectiveConvoId.startsWith('peer_') ? `support_${rawEffectiveConvoId}` : rawEffectiveConvoId;
+    
+    const parsedFromId = effectiveConvoId && effectiveConvoId.startsWith('direct_') ? parseDirectChatId(effectiveConvoId) : null;
+    const parsedSupport = effectiveConvoId && effectiveConvoId.startsWith('support_') ? parseSupportChatId(effectiveConvoId) : null;
+    const targetStudentId = activeConversation?.studentId || parsedFromId?.studentId || parsedSupport?.studentId || (effectiveConvoId && !effectiveConvoId.startsWith('support_') && !effectiveConvoId.startsWith('group_') && !effectiveConvoId.startsWith('sala_') && !effectiveConvoId.startsWith('teacher_') && !effectiveConvoId.includes('_') ? effectiveConvoId : undefined);
+    const targetTeacherId = isTeacher && user?.id ? resolveUserUid(user) : (activeConversation?.teacherId || parsedFromId?.teacherId || undefined);
+    const directParticipants = targetStudentId && targetTeacherId ? [targetStudentId, targetTeacherId] : undefined;
+    const supportParticipants = targetStudentId ? [targetStudentId] : undefined;
+    const chatParticipants = effectiveConvoId?.startsWith('support_') ? supportParticipants : directParticipants;
+
+    const { messages: unifiedMessages, loading: loadingUnifiedMessages, sendMessage, markAsRead, editMessage, deleteMessage } = useChat(
+        effectiveConvoId, 
+        user?.id || null,
+        {
+            studentId: targetStudentId || undefined,
+            teacherId: targetTeacherId || undefined,
+            participants: chatParticipants
+        }
+    );
 
     const activeMessages = useMemo(() => {
         if (!unifiedMessages) return [];
@@ -959,12 +1010,19 @@ export const AdminChatPage: React.FC = () => {
 
         setIsSending(true);
         try {
-            await sendMessage(input.trim(), 'text', undefined, attachments, isTeacher ? 'teacher' : 'admin');
+            await sendMessage(
+                input.trim(), 
+                'text', 
+                directParticipants, 
+                attachments, 
+                isTeacher ? 'teacher' : 'admin'
+            );
             setInput('');
             setAttachments([]);
             if (textareaRef.current) {
                 textareaRef.current.style.height = 'auto';
             }
+            queryClient.invalidateQueries({ queryKey: ['conversations'] });
         } catch (error) {
             console.error("Failed to send message", error);
         } finally {
@@ -1516,6 +1574,38 @@ export const AdminChatPage: React.FC = () => {
                                 onClose={() => setIsManageStudentsModalOpen(false)} 
                                 courseId={selectedConversationId}
                             />
+                        )}
+                        {showClearChatModal && (
+                            <div className="fixed inset-0 z-[110] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+                                <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-md w-full border border-slate-200 dark:border-slate-700 space-y-4">
+                                    <h3 className="text-lg font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                                        <ShieldAlert className="w-5 h-5 text-red-600" />
+                                        <span>¿Limpiar historial de chat?</span>
+                                    </h3>
+                                    <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                                        Esta acción eliminará permanentemente <strong>todos los mensajes</strong> de este canal/conversación. No se puede deshacer. ¿Deseas continuar?
+                                    </p>
+                                    <div className="flex justify-end gap-3 pt-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowClearChatModal(false)}
+                                            disabled={isClearingChat}
+                                            className="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-300 transition cursor-pointer"
+                                        >
+                                            Cancelar
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleClearChat}
+                                            disabled={isClearingChat}
+                                            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                                        >
+                                            {isClearingChat ? <Spinner /> : null}
+                                            <span>Sí, limpiar chat</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         )}
                     </>
                 )) : (

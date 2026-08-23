@@ -6,6 +6,7 @@ import { useI18n } from '../hooks/useI18n';
 import { ROUTES } from '../constants/routes';
 import * as api from '../services/api';
 import type { StudentUser, CourseLevel } from '../types';
+import { getDirectChatId, resolveUserUid } from '../utils/chatUtils';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Users,
@@ -598,7 +599,12 @@ export const TeacherStudentsPage: React.FC = () => {
                 {/* Quick Shortcuts */}
                 <div className="grid grid-cols-2 gap-2.5">
                   <button
-                    onClick={() => navigate(`${ROUTES.CHAT}?studentId=${selectedStudent.id}`, { state: { activeChatType: 'peer', activeConvoId: `peer_${selectedStudent.id}_${user?.id}` } })}
+                    onClick={() => {
+                      const sUid = resolveUserUid(selectedStudent);
+                      const tUid = resolveUserUid(user);
+                      const directId = getDirectChatId(sUid, tUid);
+                      navigate(`${ROUTES.CHAT}?studentId=${sUid}`, { state: { activeChatType: 'peer', activeConvoId: directId } });
+                    }}
                     className="flex items-center justify-center gap-1.5 py-2 px-3 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/30 dark:hover:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-xl text-xs font-bold border border-indigo-100 dark:border-indigo-900 transition"
                   >
                     <MessageSquare className="w-4 h-4" />

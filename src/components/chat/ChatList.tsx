@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { UserCircle, MessageSquare, HelpCircle, Headphones, GraduationCap, Users } from 'lucide-react';
 import type { Conversation } from '../../types';
 import { useI18n } from '../../hooks/useI18n';
+import { getDirectChatId, resolveUserUid } from '../../utils/chatUtils';
 
 export interface ActiveChannel {
     type: 'support' | 'teacher';
@@ -24,8 +25,10 @@ export const ChatList: React.FC<ChatListProps> = ({ conversations, teachers, act
     const unreadSupport = conversations?.some(c => c.id === `support_${studentId}` && c.unreadByStudent) || false;
 
     const unreadTeachersCount = (teachers || []).filter((t: any) => {
-        const convoId = `${studentId}_${t.id}`;
-        return conversations?.some(c => c.id === convoId && c.unreadByStudent);
+        const teacherUid = resolveUserUid(t);
+        const canonicalConvoId = getDirectChatId(studentId, teacherUid);
+        const legacyConvoId = `${studentId}_${t.id}`;
+        return conversations?.some(c => (c.id === canonicalConvoId || c.id === legacyConvoId) && c.unreadByStudent);
     }).length;
 
     return (
@@ -95,9 +98,11 @@ export const ChatList: React.FC<ChatListProps> = ({ conversations, teachers, act
                         <div className="space-y-1 mt-1">
                             {teachers && teachers.length > 0 ? (
                                 teachers.map((t: any) => {
-                                    const convoId = `${studentId}_${t.id}`;
-                                    const unread = conversations?.some(c => c.id === convoId && c.unreadByStudent) || false;
-                                    const isSelected = activeChannel.type === 'teacher' && activeChannel.teacher?.id === t.id;
+                                    const teacherUid = resolveUserUid(t);
+                                    const canonicalConvoId = getDirectChatId(studentId, teacherUid);
+                                    const legacyConvoId = `${studentId}_${t.id}`;
+                                    const unread = conversations?.some(c => (c.id === canonicalConvoId || c.id === legacyConvoId) && c.unreadByStudent) || false;
+                                    const isSelected = activeChannel.type === 'teacher' && resolveUserUid(activeChannel.teacher) === teacherUid;
 
                                     return (
                                         <button

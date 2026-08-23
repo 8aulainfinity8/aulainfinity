@@ -17,6 +17,7 @@ import { Whiteboard } from './Whiteboard';
 import { db } from '../services/firebase';
 import { Spinner } from './ui/Spinner';
 import { doc, onSnapshot } from 'firebase/firestore';
+import { getDirectChatId, resolveUserUid } from '../utils/chatUtils';
 
 // Subcomponents
 import { ChatList, ActiveChannel } from './chat/ChatList';
@@ -59,14 +60,18 @@ export const ChatPage: React.FC = () => {
         refetchInterval: 5000,
     });
 
+    const activeTeacherUid = activeChannel.type === 'teacher' && activeChannel.teacher ? resolveUserUid(activeChannel.teacher) : '';
+
     const conversationId = useMemo(() => {
         if (!studentId) return null;
-        if (activeChannel.type === 'teacher' && activeChannel.teacher) {
-            return `${studentId}_${activeChannel.teacher.id}`;
-        } else {
+        if (activeChannel.type === 'teacher') {
+            if (!activeTeacherUid) return null;
+            return getDirectChatId(studentId, activeTeacherUid);
+        } else if (activeChannel.type === 'support') {
             return `support_${studentId}`;
         }
-    }, [studentId, activeChannel]);
+        return null;
+    }, [studentId, activeChannel.type, activeTeacherUid]);
 
     const location = useLocation();
     const [showVoiceCall, setShowVoiceCall] = useState(false);
@@ -78,7 +83,15 @@ export const ChatPage: React.FC = () => {
     const [showResolveConfirmModal, setShowResolveConfirmModal] = useState(false);
     const [isClosingDuda, setIsClosingDuda] = useState(false);
 
-    const { messages, loading: isLoading, sendMessage, markAsRead } = useChat(conversationId || '', studentId);
+    const { messages, loading: isLoading, sendMessage, markAsRead } = useChat(
+        conversationId, 
+        studentId,
+        {
+            studentId,
+            teacherId: activeTeacherUid || undefined,
+            participants: activeTeacherUid ? [studentId, activeTeacherUid] : undefined
+        }
+    );
     
     const [isSending, setIsSending] = useState(false);
 
@@ -118,15 +131,16 @@ export const ChatPage: React.FC = () => {
     useEffect(() => {
         if (!location.state?.activeConvoId || !teachers) return;
         const convoId = location.state.activeConvoId;
-        if (convoId.includes('_')) {
-            const parts = convoId.split('_');
+        const cleanConvo = convoId.replace(/^direct_/, '').replace(/^peer_/, '');
+        if (cleanConvo.includes('_')) {
+            const parts = cleanConvo.split('_');
             const teacherId = parts[1] || parts[0];
-            const foundTeacher = teachers.find((t: any) => t.id === teacherId);
+            const foundTeacher = teachers.find((t: any) => resolveUserUid(t) === teacherId || t.id === teacherId);
             if (foundTeacher) {
                 setActiveChannel({ type: 'teacher', teacher: foundTeacher });
                 setShowChannelsMobile(false);
             }
-        } else {
+        } else if (convoId.startsWith('support_')) {
             setActiveChannel({ type: 'support' });
             setShowChannelsMobile(false);
         }
@@ -140,10 +154,7 @@ export const ChatPage: React.FC = () => {
             conversationId,
             baseId,
             `direct_${baseId}`,
-            conversationId?.includes('_') ? conversationId.split('_')[0] : null,
-            conversationId?.includes('_') ? `direct_${conversationId.split('_')[0]}` : null,
-            activeChannel.type === 'teacher' && activeChannel.teacher ? `${baseId}_${activeChannel.teacher.id}` : null,
-            activeChannel.type === 'teacher' && activeChannel.teacher ? `direct_${baseId}_${activeChannel.teacher.id}` : null
+            activeTeacherUid ? getDirectChatId(baseId, activeTeacherUid) : null
         ].filter(Boolean))) as string[];
 
         const activeVoiceMap: Record<string, boolean> = {};
@@ -171,7 +182,7 @@ export const ChatPage: React.FC = () => {
         return () => {
             unsubs.forEach(u => u());
         };
-    }, [conversationId, studentId, activeChannel]);
+    }, [conversationId, studentId, activeChannel, activeTeacherUid]);
 
     // Auto select teacher if activeChannel is teacher and teacher object is not yet populated
     useEffect(() => {
@@ -248,7 +259,13 @@ export const ChatPage: React.FC = () => {
         
         setIsSending(true);
         try {
-            await sendMessage(input.trim(), 'text', undefined, attachments, 'student');
+            await sendMessage(
+                input.trim(), 
+                'text', 
+                activeTeacherUid ? [studentId, activeTeacherUid] : undefined, 
+                attachments, 
+                'student'
+            );
             queryClient.invalidateQueries({ queryKey: ['conversations'] }); // Invalidate admin/teacher conversations
             setInput('');
             setAttachments([]);

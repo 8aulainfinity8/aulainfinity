@@ -16,6 +16,23 @@ import {
 import { db, auth } from '../services/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import * as api from '../services/api';
+import {
+  inferParticipantsFromChatId,
+  parseDirectChatId,
+  parseSupportChatId,
+  getDirectChatId,
+  getDirectChatParticipants,
+  resolveUserUid
+} from '../utils/chatUtils';
+
+export {
+  inferParticipantsFromChatId,
+  parseDirectChatId,
+  parseSupportChatId,
+  getDirectChatId,
+  getDirectChatParticipants,
+  resolveUserUid
+};
 
 export interface ChatMessage {
   id: string;
@@ -25,12 +42,17 @@ export interface ChatMessage {
   timestamp: any;
   type?: 'text' | 'voice_note';
   attachments?: any[];
+  participants?: string[];
 }
 
 export interface ChatMetadata {
   chatId: string;
   type: 'direct' | 'peer' | 'group';
   participants: string[];
+  studentId?: string;
+  teacherId?: string;
+  createdBy?: string;
+  createdAt?: any;
   status?: 'open' | 'pending' | 'resolved' | 'closed';
   subjectId?: string;
   lastMessage?: string;
@@ -39,33 +61,17 @@ export interface ChatMetadata {
   isMuted?: boolean;
 }
 
-/**
- * Infiere los IDs de participantes a partir del identificador determinista del chat
- */
-export function inferParticipantsFromChatId(chatId: string, currentUserId: string): string[] {
-  const set = new Set<string>();
-  if (currentUserId) set.add(currentUserId);
-
-  if (!chatId) return Array.from(set);
-
-  if (chatId.startsWith('direct_')) {
-    // Formato: direct_<profesorId>_<alumnoId>_<subjectId>
-    const withoutPrefix = chatId.replace('direct_', '');
-    const parts = withoutPrefix.split('_');
-    if (parts[0]) set.add(parts[0]);
-    if (parts[1]) set.add(parts[1]);
-  } else if (chatId.startsWith('peer_')) {
-    // Formato: peer_<uid1>_<uid2>
-    const withoutPrefix = chatId.replace('peer_', '');
-    const parts = withoutPrefix.split('_');
-    if (parts[0]) set.add(parts[0]);
-    if (parts[1]) set.add(parts[1]);
-  }
-
-  return Array.from(set);
+export interface UseChatOptions {
+  studentId?: string;
+  teacherId?: string;
+  participants?: string[];
 }
 
-export function useChat(chatId: string | null, currentUserId: string | null) {
+export function useChat(
+  chatId: string | null, 
+  currentUserId: string | null,
+  options?: UseChatOptions
+) {
   const { isFirebaseAuthReady, firebaseUser, firebaseEmailVerified, firebaseRole } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatMeta, setChatMeta] = useState<ChatMetadata | null>(null);
@@ -106,7 +112,12 @@ export function useChat(chatId: string | null, currentUserId: string | null) {
     let unsubChat: (() => void) | null = null;
     let unsubMessages: (() => void) | null = null;
 
-    console.log(`[Firestore] Chat listeners initialized for chat: ${chatId} | user: ${currentUser.uid} | role: ${firebaseRole || 'none'}`);
+    const parsedSupport = chatId.startsWith('support_') ? parseSupportChatId(chatId) : { studentId: null };
+    const initialParticipants = options?.participants || 
+      (options?.studentId && options?.teacherId ? [options.studentId, options.teacherId] : 
+       (parsedSupport.studentId ? [parsedSupport.studentId] : inferParticipantsFromChatId(chatId, currentUser.uid)));
+
+    console.log(`[Firestore] Chat listeners initialized for chat: ${chatId} | user: ${currentUser.uid} | role: ${firebaseRole || 'none'} | participants: [${initialParticipants.join(', ')}]`);
 
     try {
       // Documento de metadatos del chat
@@ -158,7 +169,7 @@ export function useChat(chatId: string | null, currentUserId: string | null) {
       if (unsubChat) unsubChat();
       if (unsubMessages) unsubMessages();
     };
-  }, [chatId, isFirebaseAuthReady, firebaseUser, firebaseEmailVerified, firebaseRole]);
+  }, [chatId, isFirebaseAuthReady, firebaseUser, firebaseEmailVerified, firebaseRole, options?.studentId, options?.teacherId]);
 
   // Marcar como leído los mensajes de la conversación actual
   const markAsRead = useCallback(async () => {
@@ -193,9 +204,19 @@ export function useChat(chatId: string | null, currentUserId: string | null) {
 
     isSendingRef.current = true;
     try {
-      // Verificar que existe sesión real de Firebase Auth antes de escribir en Firestore
-      const currentUser = auth?.currentUser;
-      const isFirebaseAuthed = Boolean(currentUser && currentUser.emailVerified);
+      // Verificar coincidencia de identidad entre currentUserId y auth.currentUser.uid
+      const currentUser = auth?.currentUser || firebaseUser;
+      if (currentUser && currentUserId && currentUser.uid !== currentUserId) {
+        console.error('[Security Error] currentUserId does not match auth.currentUser.uid:', {
+          currentUserId,
+          authUid: currentUser.uid
+        });
+        setError('Error de seguridad: Inconsistencia en la identidad del usuario.');
+        return;
+      }
+
+      const effectiveSenderId = currentUser ? currentUser.uid : currentUserId;
+      const isFirebaseAuthed = Boolean(currentUser && (currentUser.emailVerified || firebaseEmailVerified));
 
       if (!isFirebaseAuthed) {
         console.warn('[useChat] Skipped Firestore write: Firebase Auth session not present or not verified.');
@@ -203,7 +224,7 @@ export function useChat(chatId: string | null, currentUserId: string | null) {
         try {
           await api.sendMessage({
             conversationId: chatId,
-            senderId: currentUserId,
+            senderId: effectiveSenderId,
             senderRole: (senderRole || 'student') as any,
             text,
             attachments
@@ -239,30 +260,66 @@ export function useChat(chatId: string | null, currentUserId: string | null) {
       }
 
       if (participantsList.length === 0) {
-        participantsList = inferParticipantsFromChatId(chatId, currentUserId);
+        if (options?.participants && options.participants.length > 0) {
+          participantsList = [...options.participants];
+        } else if (options?.studentId && options?.teacherId) {
+          participantsList = getDirectChatParticipants(options.studentId, options.teacherId);
+        } else {
+          participantsList = inferParticipantsFromChatId(chatId, effectiveSenderId);
+        }
       }
 
-      if (!participantsList.includes(currentUserId)) {
-        participantsList.push(currentUserId);
+      // Validar que en chats direct/peer no se permita enviar si el usuario no pertenece a la conversación
+      const isDirectOrPeer = chatId.startsWith('direct_') || chatId.startsWith('peer_');
+      if (isDirectOrPeer && !participantsList.includes(effectiveSenderId) && firebaseRole !== 'admin') {
+        console.error('[Security Error] Usuario intentó enviar un mensaje a una conversación donde no es participante:', {
+          chatId,
+          effectiveSenderId,
+          participantsList
+        });
+        setError('Error de seguridad: No tienes permisos para participar en este chat.');
+        return;
+      }
+
+      if (!chatId.startsWith('support_') && !participantsList.includes(effectiveSenderId)) {
+        participantsList.push(effectiveSenderId);
       }
 
       // Contador inicial de no leídos
       const initialUnread: Record<string, number> = {};
       participantsList.forEach(pId => {
-        initialUnread[pId] = pId === currentUserId ? 0 : 1;
+        initialUnread[pId] = pId === effectiveSenderId ? 0 : 1;
       });
 
       // Si la conversación no existe en Firestore, crearla
       if (!chatExists) {
-        await setDoc(chatRef, {
+        const isDirect = chatId.startsWith('direct_');
+        const isPeer = chatId.startsWith('peer_');
+        const isSupport = chatId.startsWith('support_');
+        const parsedDirect = isDirect ? parseDirectChatId(chatId) : { studentId: null, teacherId: null };
+        const parsedSupport = isSupport ? parseSupportChatId(chatId) : { studentId: null };
+        const finalStudentId = options?.studentId || parsedDirect.studentId || parsedSupport.studentId || undefined;
+        const finalTeacherId = options?.teacherId || parsedDirect.teacherId || undefined;
+
+        const chatPayload: any = {
           chatId,
-          type: chatId.startsWith('direct_') ? 'direct' : chatId.startsWith('peer_') ? 'peer' : 'group',
+          type: isDirect ? 'direct' : isPeer ? 'peer' : isSupport ? 'support' : 'group',
           participants: participantsList,
           lastMessage: text,
           lastMessageTimestamp: serverTimestamp(),
           unreadCount: initialUnread,
+          createdBy: effectiveSenderId,
           createdAt: serverTimestamp()
-        }, { merge: true }).catch((err) => {
+        };
+
+        if (finalStudentId) {
+          chatPayload.studentId = finalStudentId;
+        }
+        if (finalTeacherId) {
+          chatPayload.teacherId = finalTeacherId;
+        }
+
+        await setDoc(chatRef, chatPayload, { merge: true }).catch((err) => {
           console.warn('[useChat] Error creating chat (possibly queued offline):', err);
         });
       }
@@ -271,7 +328,7 @@ export function useChat(chatId: string | null, currentUserId: string | null) {
       const messageDocRef = doc(messagesRef);
       const messagePayload: any = {
         id: messageDocRef.id,
-        senderId: currentUserId,
+        senderId: effectiveSenderId,
         text,
         type,
         timestamp: serverTimestamp(),
@@ -292,7 +349,7 @@ export function useChat(chatId: string | null, currentUserId: string | null) {
       };
 
       participantsList.forEach(pId => {
-        if (pId !== currentUserId) {
+        if (pId !== effectiveSenderId) {
           updateData[`unreadCount.${pId}`] = increment(1);
         }
       });
@@ -314,8 +371,15 @@ export function useChat(chatId: string | null, currentUserId: string | null) {
   const editMessage = async (messageId: string, newText: string) => {
     if (!chatId || !currentUserId || !messageId) return;
     try {
-      const currentUser = auth?.currentUser;
-      const isFirebaseAuthed = Boolean(currentUser && currentUser.emailVerified);
+      const currentUser = auth?.currentUser || firebaseUser;
+      if (currentUser && currentUserId && currentUser.uid !== currentUserId) {
+        console.error('[Security Error] currentUserId does not match auth.currentUser.uid in editMessage:', {
+          currentUserId,
+          authUid: currentUser.uid
+        });
+        throw new Error('Error de seguridad: Inconsistencia en la identidad del usuario.');
+      }
+      const isFirebaseAuthed = Boolean(currentUser && (currentUser.emailVerified || firebaseEmailVerified));
       if (!isFirebaseAuthed) {
         if (chatId.startsWith('peer_')) {
             await api.editPeerMessage(messageId, newText);
@@ -337,8 +401,15 @@ export function useChat(chatId: string | null, currentUserId: string | null) {
   const deleteMessage = async (messageId: string) => {
     if (!chatId || !currentUserId || !messageId) return;
     try {
-      const currentUser = auth?.currentUser;
-      const isFirebaseAuthed = Boolean(currentUser && currentUser.emailVerified);
+      const currentUser = auth?.currentUser || firebaseUser;
+      if (currentUser && currentUserId && currentUser.uid !== currentUserId) {
+        console.error('[Security Error] currentUserId does not match auth.currentUser.uid in deleteMessage:', {
+          currentUserId,
+          authUid: currentUser.uid
+        });
+        throw new Error('Error de seguridad: Inconsistencia en la identidad del usuario.');
+      }
+      const isFirebaseAuthed = Boolean(currentUser && (currentUser.emailVerified || firebaseEmailVerified));
       if (!isFirebaseAuthed) {
         if (chatId.startsWith('peer_')) {
             await api.deletePeerMessage(messageId);

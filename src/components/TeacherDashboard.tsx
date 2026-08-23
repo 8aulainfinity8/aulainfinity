@@ -40,6 +40,7 @@ import { Card, CardTitle, CardDescription, Badge, Button, EmptyState, Skeleton }
 import { WorkloadChart } from './WorkloadChart';
 import { isTeacherMatchForSubject, isTutoringRequestForTeacher } from '../utils/tutoringHelpers';
 import { useI18n } from '../hooks/useI18n';
+import { getDirectChatId, resolveUserUid } from '../utils/chatUtils';
 
 // --- SUB-COMPONENT: FULL QUIZ QUESTION ANALYSIS DIAGNOSTIC ---
 const QuizSubmissionDetails: React.FC<{ videoId: string; answer: StudentAnswer }> = ({ videoId, answer }) => {
@@ -803,7 +804,12 @@ export const TeacherDashboard: React.FC = () => {
                                             </div>
 
                                             <button 
-                                                onClick={() => navigate(`${ROUTES.CHAT}?studentId=${conv.studentId || conv.id}`, { state: { activeChatType: 'private', activeConvoId: conv.id } })}
+                                                onClick={() => {
+                                                    const sUid = resolveUserUid(conv.studentId || conv.id);
+                                                    const tUid = resolveUserUid(user);
+                                                    const directId = getDirectChatId(sUid, tUid);
+                                                    navigate(`${ROUTES.CHAT}?studentId=${sUid}`, { state: { activeChatType: 'peer', activeConvoId: directId } });
+                                                }}
                                                 className="shrink-0 px-4 py-2 border border-slate-200 dark:border-slate-600 hover:border-primary text-slate-700 dark:text-slate-350 hover:text-primary font-bold rounded-lg text-xs transition bg-white dark:bg-slate-800 hover:bg-slate-50 shadow-sm"
                                             >
                                                 Ver Chat
@@ -1138,8 +1144,10 @@ export const TeacherDashboard: React.FC = () => {
                                             <button
                                                 type="button"
                                                 onClick={() => {
-                                                    const peerConvoId = `peer_${student.id}_${user?.id}`;
-                                                    navigate(`${ROUTES.CHAT}?studentId=${student.id}`, { state: { activeChatType: 'peer', activeConvoId: peerConvoId } });
+                                                    const sUid = resolveUserUid(student.id || student);
+                                                    const tUid = resolveUserUid(user);
+                                                    const directId = getDirectChatId(sUid, tUid);
+                                                    navigate(`${ROUTES.CHAT}?studentId=${sUid}`, { state: { activeChatType: 'peer', activeConvoId: directId } });
                                                 }}
                                                 className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 font-extrabold rounded-xl text-xs transition duration-150 border cursor-pointer shadow-xs ${
                                                     hasUnread 

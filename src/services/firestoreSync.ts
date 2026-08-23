@@ -2277,3 +2277,16 @@ export const syncAssignStudentTeacherInFirestore = async (studentId: string, tea
     await syncConversationTeacherInFirestore(studentId, teacherId, teacherName || null);
 };
 
+import { httpsCallable } from 'firebase/functions';
+
+export const syncClearChatMessagesInFirestore = async (conversationId: string): Promise<void> => {
+    try {
+        const { functions } = await import('./firebase');
+        const adminClearChatMessages = httpsCallable(functions, 'adminClearChatMessages');
+        await adminClearChatMessages({ conversationId });
+    } catch (e) {
+        console.warn('Failed to clear chat messages via Callable Function:', e);
+        throw e;
+    }
+};
+

@@ -28,6 +28,7 @@ import {
     HelpCircle
 } from 'lucide-react';
 import { ROUTES } from '../constants/routes';
+import { normalizeMessageTimestamp, formatMessageTime } from '../utils/chatUtils';
 import { AuthContext } from '../contexts/AuthContext';
 import { useChat } from '../hooks/useChat';
 import { ClassReplayModal } from './ClassReplayModal';
@@ -163,7 +164,7 @@ const PeerMessageBubble: React.FC<{
                     <RenderAttachments attachments={message.attachments} />
                     <div className="flex items-center justify-end gap-1 mt-1 font-sans">
                         <span className={`text-[9px] font-semibold leading-none ${isMe ? 'text-indigo-200/80' : 'text-slate-400 dark:text-slate-400'}`}>
-                            {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            {formatMessageTime(message.timestamp)}
                         </span>
                         {isMe && (
                             <span 
@@ -199,7 +200,11 @@ const PeerMessageBubble: React.FC<{
 });
 
 // --- MAIN COMPONENT ---
-export const StudentChatPage: React.FC = () => {
+export interface StudentChatPageProps {
+    initialTab?: 'private' | 'group';
+}
+
+export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) => {
     const { t } = useI18n();
     const { user } = useContext(AuthContext);
     const { addToast } = useContext(NotificationContext);
@@ -210,8 +215,8 @@ export const StudentChatPage: React.FC = () => {
     const location = useLocation();
     const [searchQuery, setSearchQuery] = useState('');
     const [activeConvoId, setActiveConvoId] = useState<string | null>(location.state?.activeConvoId || null);
-    const [activeChatType, setActiveChatType] = useState<'private' | 'group'>(location.state?.activeChatType || 'private');
-    const [activeTab, setActiveTab] = useState<'private' | 'group'>(location.state?.activeChatType || 'private');
+    const [activeChatType, setActiveChatType] = useState<'private' | 'group'>(initialTab || location.state?.activeChatType || 'private');
+    const [activeTab, setActiveTab] = useState<'private' | 'group'>(initialTab || location.state?.activeChatType || 'private');
 
     const [showVoiceCall, setShowVoiceCall] = useState(false);
     const [isVoiceCallActive, setIsVoiceCallActive] = useState(false);
@@ -632,7 +637,7 @@ export const StudentChatPage: React.FC = () => {
         
         let lastDateStr = '';
         rawMessages.forEach((msg: any) => {
-            const msgDate = new Date(msg.timestamp);
+            const msgDate = normalizeMessageTimestamp(msg.timestamp);
             const formattedDate = formatDateSeparator(msgDate);
             if (formattedDate !== lastDateStr) {
                 items.push({

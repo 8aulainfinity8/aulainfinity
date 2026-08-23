@@ -77,44 +77,6 @@ service cloud.firestore {
       );
     }
 
-    // Canonical communication helpers (Fase F69)
-    function isDirectChatIdForUser(chatId) {
-      return isVerifiedUser() && (
-        chatId.matches('^direct_' + request.auth.uid + '_[a-zA-Z0-9_-]+$') ||
-        chatId.matches('^direct_[a-zA-Z0-9_-]+_' + request.auth.uid + '$') ||
-        chatId.matches('^' + request.auth.uid + '_[a-zA-Z0-9_-]+$') ||
-        chatId.matches('^[a-zA-Z0-9_-]+_' + request.auth.uid + '$')
-      );
-    }
-
-    function isPeerChatIdForUser(chatId) {
-      return isVerifiedUser() && (
-        chatId.matches('^peer_' + request.auth.uid + '_[a-zA-Z0-9_-]+$') ||
-        chatId.matches('^peer_[a-zA-Z0-9_-]+_' + request.auth.uid + '$')
-      );
-    }
-
-    function isSupportChatForStudent(chatId) {
-      return isVerifiedUser() &&
-             request.auth.token.role == 'student' &&
-             chatId == 'support_' + request.auth.uid;
-    }
-
-    function isSupportChatId(chatId) {
-      return chatId.matches('^support_[a-zA-Z0-9_-]+$');
-    }
-
-    function isSupportChatForApprovedTeacher(chatId) {
-      return isApprovedTeacher() && isSupportChatId(chatId);
-    }
-
-    function isTeacherCoordinationChat(chatId) {
-      return isApprovedTeacher() && (
-        chatId == 'sala_profesores_coordinacion' ||
-        chatId == 'teacher_' + request.auth.uid
-      );
-    }
-
 
     // 1. App Configuration (Public read, Admin write)
     match /app_config/{id} {
@@ -295,17 +257,13 @@ service cloud.firestore {
     }
 
     // 5. Communications, Rooms, Calls, Whiteboards
-    // Aislamiento estricto de participantes y autoría de mensajes (Fase 1 y Fase F69)
+    // Aislamiento estricto de participantes y autoría de mensajes (Fase 1)
     match /chats/{chatId} {
-      // Función para validar pertenencia legítima al chat
+      // Función para validar pertenencia al chat (recurso existente o por ID)
       function isChatParticipant() {
         return isVerifiedUser() && (
           isAdmin() ||
-          isDirectChatIdForUser(chatId) ||
-          isPeerChatIdForUser(chatId) ||
-          isSupportChatForStudent(chatId) ||
-          isSupportChatForApprovedTeacher(chatId) ||
-          isTeacherCoordinationChat(chatId) ||
+          isIdParticipant(chatId) ||
           isEnrolledInCourse(chatId) ||
           isTeacherOfCourse(chatId) ||
           (resource != null && (
@@ -320,35 +278,24 @@ service cloud.firestore {
       // Lectura: solo participantes legítimos o admin
       allow get, list: if isChatParticipant();
 
-      // Creación: exige creador verificado, chatId canónico y pertenencia a participants
+      // Creación: el usuario debe ser parte de los participantes o del chatId
       allow create: if isVerifiedUser() && (
-        isAdmin() || (
-          (request.resource.data.createdBy is string && request.resource.data.createdBy == request.auth.uid) &&
-          (
-            isDirectChatIdForUser(chatId) ||
-            isPeerChatIdForUser(chatId) ||
-            isSupportChatForStudent(chatId) ||
-            isSupportChatForApprovedTeacher(chatId) ||
-            isTeacherCoordinationChat(chatId) ||
-            isEnrolledInCourse(chatId) ||
-            isTeacherOfCourse(chatId)
-          ) &&
+        isAdmin() ||
+        (
+          (isIdParticipant(chatId) || (request.resource.data.participants is list && request.auth.uid in request.resource.data.participants)) &&
           (!('participants' in request.resource.data) || (request.resource.data.participants is list && request.auth.uid in request.resource.data.participants))
         )
       );
 
       // Actualización: participantes pueden actualizar estado operativo (lastMessage, unreadCount, etc.)
-      // pero participants, participantIds, type, chatId, createdBy, createdAt son inmutables para no-admins.
+      // pero participants, type, chatId, createdBy, createdAt son inmutables para no-admins.
       allow update: if isChatParticipant() && (
         isAdmin() || (
           (!('participants' in request.resource.data) || !('participants' in resource.data) || request.resource.data.participants == resource.data.participants) &&
-          (!('participantIds' in request.resource.data) || !('participantIds' in resource.data) || request.resource.data.participantIds == resource.data.participantIds) &&
           (!('type' in request.resource.data) || !('type' in resource.data) || request.resource.data.type == resource.data.type) &&
           (!('chatId' in request.resource.data) || !('chatId' in resource.data) || request.resource.data.chatId == resource.data.chatId) &&
           (!('createdBy' in request.resource.data) || !('createdBy' in resource.data) || request.resource.data.createdBy == resource.data.createdBy) &&
-          (!('createdAt' in request.resource.data) || !('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
-          (!('lastMessageTimestamp' in request.resource.data) || request.resource.data.lastMessageTimestamp <= request.time) &&
-          (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt <= request.time)
+          (!('createdAt' in request.resource.data) || !('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt)
         )
       );
 
@@ -360,11 +307,7 @@ service cloud.firestore {
         // Lectura de mensajes: participantes del chat o admin
         allow get, list: if isVerifiedUser() && (
           isAdmin() ||
-          isDirectChatIdForUser(chatId) ||
-          isPeerChatIdForUser(chatId) ||
-          isSupportChatForStudent(chatId) ||
-          isSupportChatForApprovedTeacher(chatId) ||
-          isTeacherCoordinationChat(chatId) ||
+          isIdParticipant(chatId) ||
           isEnrolledInCourse(chatId) ||
           isTeacherOfCourse(chatId) ||
           (resource != null && (
@@ -372,27 +315,21 @@ service cloud.firestore {
             resource.data.senderId == request.auth.uid
           )) ||
           (exists(/databases/$(database)/documents/chats/$(chatId)) &&
-           get(/databases/$(database)/documents/chats/$(chatId)).data.get('participants', []) is list &&
-           request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.get('participants', []))
+            get(/databases/$(database)/documents/chats/$(chatId)).data.get('participants', []) is list &&
+            request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.get('participants', []))
         );
 
         // Creación de mensaje: debe ser participante del chat y senderId DEBE coincidir con el usuario autenticado
         allow create: if isVerifiedUser() && (
           isAdmin() || (
-            request.resource.data.senderId == request.auth.uid &&
-            (!('chatId' in request.resource.data) || request.resource.data.chatId == chatId) &&
-            (
-              isDirectChatIdForUser(chatId) ||
-              isPeerChatIdForUser(chatId) ||
-              isSupportChatForStudent(chatId) ||
-              isSupportChatForApprovedTeacher(chatId) ||
-              isTeacherCoordinationChat(chatId) ||
-              isEnrolledInCourse(chatId) ||
-              isTeacherOfCourse(chatId) ||
-              (exists(/databases/$(database)/documents/chats/$(chatId)) &&
-               get(/databases/$(database)/documents/chats/$(chatId)).data.get('participants', []) is list &&
-               request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.get('participants', []))
-            )
+            (isIdParticipant(chatId) ||
+             isEnrolledInCourse(chatId) ||
+             isTeacherOfCourse(chatId) ||
+             (request.resource.data.participants is list && request.auth.uid in request.resource.data.participants) ||
+             (exists(/databases/$(database)/documents/chats/$(chatId)) &&
+              get(/databases/$(database)/documents/chats/$(chatId)).data.get('participants', []) is list &&
+              request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.get('participants', []))) &&
+            request.resource.data.senderId == request.auth.uid
           )
         );
 
@@ -402,9 +339,7 @@ service cloud.firestore {
             resource.data.senderId == request.auth.uid &&
             request.resource.data.senderId == resource.data.senderId &&
             (!('chatId' in request.resource.data) || !('chatId' in resource.data) || request.resource.data.chatId == resource.data.chatId) &&
-            (!('timestamp' in request.resource.data) || !('timestamp' in resource.data) || request.resource.data.timestamp == resource.data.timestamp) &&
-            (!('senderRole' in request.resource.data) || !('senderRole' in resource.data) || request.resource.data.senderRole == resource.data.senderRole) &&
-            (!('type' in request.resource.data) || !('type' in resource.data) || request.resource.data.type == resource.data.type)
+            (!('timestamp' in request.resource.data) || !('timestamp' in resource.data) || request.resource.data.timestamp == resource.data.timestamp)
           )
         );
 
@@ -417,12 +352,20 @@ service cloud.firestore {
 
       // Subcolección de señalización WebRTC del chat (para useVoiceCall)
       match /signal/{signalDoc=**} {
-        allow read, write: if isChatParticipant();
+        allow read, write: if isVerifiedUser() && (
+          isAdmin() ||
+          isIdParticipant(chatId) ||
+          (resource != null && resource.data.participants is list && request.auth.uid in resource.data.participants)
+        );
       }
 
       // Otras subcolecciones de chat restringidas a participantes
       match /{otherSubcollection}/{docId=**} {
-        allow read, write: if isChatParticipant();
+        allow read, write: if isVerifiedUser() && (
+          isAdmin() ||
+          isIdParticipant(chatId) ||
+          (resource != null && resource.data.participants is list && request.auth.uid in resource.data.participants)
+        );
       }
     }
 
@@ -699,150 +642,43 @@ service cloud.firestore {
     }
 
     match /conversations/{convId} {
-      allow read, create, delete: if isVerifiedUser() && (
-        isAdmin() ||
-        isDirectChatIdForUser(convId) ||
-        isSupportChatForStudent(convId) ||
-        (isSupportChatId(convId) && isApprovedTeacher()) ||
-        isParticipant(resource.data)
-      );
-      allow update: if isVerifiedUser() && (
-        isAdmin() ||
-        isDirectChatIdForUser(convId) ||
-        isSupportChatForStudent(convId) ||
-        (isSupportChatId(convId) && isApprovedTeacher()) ||
-        isParticipant(resource.data)
-      ) && (
-        (!('lastMessageTimestamp' in request.resource.data) || request.resource.data.lastMessageTimestamp <= request.time) &&
-        (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt <= request.time)
-      );
+      allow read, write: if isVerifiedUser() && (isIdParticipant(convId) || isParticipant(resource.data) || isApprovedTeacher());
       match /{allSubcollections=**} {
-        allow read, write: if isVerifiedUser() && (
-          isAdmin() ||
-          isDirectChatIdForUser(convId) ||
-          isSupportChatForStudent(convId) ||
-          (isSupportChatId(convId) && isApprovedTeacher()) ||
-          isParticipant(resource.data)
-        );
+        allow read, write: if isVerifiedUser() && (isIdParticipant(convId) || isParticipant(resource.data) || isApprovedTeacher());
       }
     }
 
     match /firestore_conversations/{convId} {
-      allow read, create, delete: if isVerifiedUser() && (
-        isAdmin() ||
-        isDirectChatIdForUser(convId) ||
-        isSupportChatForStudent(convId) ||
-        (isSupportChatId(convId) && isApprovedTeacher()) ||
-        isParticipant(resource.data)
-      );
-      allow update: if isVerifiedUser() && (
-        isAdmin() ||
-        isDirectChatIdForUser(convId) ||
-        isSupportChatForStudent(convId) ||
-        (isSupportChatId(convId) && isApprovedTeacher()) ||
-        isParticipant(resource.data)
-      ) && (
-        (!('lastMessageTimestamp' in request.resource.data) || request.resource.data.lastMessageTimestamp <= request.time) &&
-        (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt <= request.time)
-      );
+      allow read, write: if isVerifiedUser() && (isIdParticipant(convId) || isParticipant(resource.data) || isApprovedTeacher());
       match /{allSubcollections=**} {
-        allow read, write: if isVerifiedUser() && (
-          isAdmin() ||
-          isDirectChatIdForUser(convId) ||
-          isSupportChatForStudent(convId) ||
-          (isSupportChatId(convId) && isApprovedTeacher()) ||
-          isParticipant(resource.data)
-        );
+        allow read, write: if isVerifiedUser() && (isIdParticipant(convId) || isParticipant(resource.data) || isApprovedTeacher());
       }
     }
 
     match /firestore_direct_messages/{msgId} {
-      allow read, create: if isVerifiedUser() && (
-        isAdmin() ||
-        isDirectChatIdForUser(msgId) ||
-        isParticipant(request.resource.data)
-      );
-      allow update: if isVerifiedUser() && (
-        isAdmin() ||
-        isDirectChatIdForUser(msgId) ||
-        isParticipant(resource.data)
-      );
-      allow delete: if isVerifiedUser() && (
-        isAdmin() ||
-        (resource != null && resource.data.senderId == request.auth.uid)
-      );
+      allow read, write: if isVerifiedUser() && (isIdParticipant(msgId) || isParticipant(resource.data) || isApprovedTeacher());
     }
 
     match /firestore_peer_conversations/{convId} {
-      allow read, create, delete: if isVerifiedUser() && (
-        isAdmin() ||
-        isPeerChatIdForUser(convId) ||
-        (resource != null && resource.data.participants is list && request.auth.uid in resource.data.participants)
-      );
-      allow update: if isVerifiedUser() && (
-        isAdmin() ||
-        isPeerChatIdForUser(convId) ||
-        (resource != null && resource.data.participants is list && request.auth.uid in resource.data.participants)
-      ) && (
-        (!('lastMessageTimestamp' in request.resource.data) || request.resource.data.lastMessageTimestamp <= request.time) &&
-        (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt <= request.time)
-      );
+      allow read, write: if isVerifiedUser() && (isIdParticipant(convId) || isParticipant(resource.data) || isApprovedTeacher());
       match /{allSubcollections=**} {
-        allow read, write: if isVerifiedUser() && (
-          isAdmin() ||
-          isPeerChatIdForUser(convId) ||
-          (resource != null && resource.data.participants is list && request.auth.uid in resource.data.participants)
-        );
+        allow read, write: if isVerifiedUser() && (isIdParticipant(convId) || isParticipant(resource.data) || isApprovedTeacher());
       }
     }
 
     match /firestore_peer_messages/{msgId} {
-      allow read, create: if isVerifiedUser() && (
-        isAdmin() ||
-        isPeerChatIdForUser(msgId) ||
-        (request.resource != null && request.resource.data.participants is list && request.auth.uid in request.resource.data.participants)
-      );
-      allow update: if isVerifiedUser() && (
-        isAdmin() ||
-        isPeerChatIdForUser(msgId) ||
-        (resource != null && resource.data.participants is list && request.auth.uid in resource.data.participants)
-      );
-      allow delete: if isVerifiedUser() && (
-        isAdmin() ||
-        (resource != null && resource.data.senderId == request.auth.uid)
-      );
+      allow read, write: if isVerifiedUser() && (isIdParticipant(msgId) || isParticipant(resource.data) || isApprovedTeacher());
     }
 
     match /firestore_teacher_conversations/{convId} {
-      allow read, create, delete: if isAdmin() || (isApprovedTeacher() && (
-        convId == 'sala_profesores_coordinacion' ||
-        convId == 'teacher_' + request.auth.uid ||
-        isParticipant(resource.data)
-      ));
-      allow update: if (isAdmin() || (isApprovedTeacher() && (
-        convId == 'sala_profesores_coordinacion' ||
-        convId == 'teacher_' + request.auth.uid ||
-        isParticipant(resource.data)
-      ))) && (
-        (!('lastMessageTimestamp' in request.resource.data) || request.resource.data.lastMessageTimestamp <= request.time) &&
-        (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt <= request.time)
-      );
+      allow read, write: if isApprovedTeacher() || (isVerifiedUser() && (isIdParticipant(convId) || isParticipant(resource.data)));
       match /{allSubcollections=**} {
-        allow read, write: if isAdmin() || (isApprovedTeacher() && (
-          convId == 'sala_profesores_coordinacion' ||
-          convId == 'teacher_' + request.auth.uid ||
-          isParticipant(resource.data)
-        ));
+        allow read, write: if isApprovedTeacher() || (isVerifiedUser() && (isIdParticipant(convId) || isParticipant(resource.data)));
       }
     }
 
     match /firestore_teacher_messages/{msgId} {
-      allow read, create, update: if isAdmin() || (isApprovedTeacher() && (
-        msgId == 'sala_profesores_coordinacion' ||
-        msgId == 'teacher_' + request.auth.uid ||
-        isParticipant(resource.data)
-      ));
-      allow delete: if isAdmin() || (isApprovedTeacher() && (resource != null && resource.data.senderId == request.auth.uid));
+      allow read, write: if isApprovedTeacher() || (isVerifiedUser() && (isIdParticipant(msgId) || isParticipant(resource.data)));
     }
 
     // 6. Comments, Ratings, Transactions
@@ -918,7 +754,8 @@ match /firestore_course_messages/{msgId} {
        );
        allow delete: if isVerifiedUser() && (
          isAdmin() ||
-         (resource != null && resource.data.senderId == request.auth.uid)
+         isEnrolledInCourse(resource.data.courseId) ||
+         isTeacherOfCourse(resource.data.courseId)
        );
     }
 

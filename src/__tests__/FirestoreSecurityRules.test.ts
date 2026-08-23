@@ -55,13 +55,17 @@ describe('Pruebas de Reglas de Seguridad de Firestore (Fase 2.1B)', () => {
         expect(rulesContent).toContain('match /rooms/{roomId}');
         expect(rulesContent).toContain('match /calls/{callId}');
         expect(rulesContent).toContain('match /whiteboards/{whiteboardId}');
-        expect(rulesContent).toContain('isIdParticipant(chatId) || isParticipant(resource.data) || isApprovedTeacher()');
+        expect(rulesContent).toContain('function isRoomParticipant()');
+        expect(rulesContent).toContain('function isCallParticipant()');
+        expect(rulesContent).toContain('function isWhiteboardParticipant()');
+        expect(rulesContent).toContain('request.resource.data.senderId == request.auth.uid');
     });
 
     it('Exige isVerifiedUser() para el acceso a mensajes directos y de pares con aislamiento de participantes', () => {
         const dmsBlock = rulesContent.substring(rulesContent.indexOf('match /firestore_direct_messages/{msgId}'), rulesContent.indexOf('match /firestore_peer_conversations/{convId}'));
         expect(dmsBlock).toContain('allow read, write: if isVerifiedUser()');
-        expect(dmsBlock).toContain('isIdParticipant(msgId) || isParticipant(resource.data) || isApprovedTeacher()');
+        expect(dmsBlock).toContain('isParticipant(resource.data)');
+        expect(dmsBlock).not.toContain('isApprovedTeacher()');
     });
 
     it('Define la regla de firestore_user_seen_states/{userId} con aislamiento de propietario e isVerifiedUser', () => {

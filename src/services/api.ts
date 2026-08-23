@@ -64,7 +64,8 @@ import {
     syncAddInfinityTransactionToFirestore,
     syncMarkConversationAsReadInFirestore,
     syncMarkPeerConversationAsReadInFirestore,
-    syncCloseSupportConversationInFirestore
+    syncCloseSupportConversationInFirestore,
+    syncClearChatMessagesInFirestore
 } from './firestoreSync';
 
 // --- UTILITY ---
@@ -1642,6 +1643,12 @@ export const deleteMessage = async (messageId: string): Promise<{ success: boole
     if (res.success) {
         await syncDeleteDirectMessageFromFirestore(messageId);
     }
+    return res;
+};
+
+export const clearChatMessages = async (conversationId: string): Promise<{ success: boolean; clearedCount: number }> => {
+    const res = dbMock.dbClearChatMessages(conversationId);
+    await syncClearChatMessagesInFirestore(conversationId);
     return res;
 };
 
