@@ -1,5 +1,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
+import { initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 
 describe('Archive Orphans Script', () => {
     it('should validate environment variables', () => {
@@ -14,5 +16,16 @@ describe('Archive Orphans Script', () => {
     it('should handle impersonation variable', () => {
         process.env.FIREBASE_SERVICE_ACCOUNT_EMAIL = '327691821124-compute@developer.gserviceaccount.com';
         expect(process.env.FIREBASE_SERVICE_ACCOUNT_EMAIL).toBe('327691821124-compute@developer.gserviceaccount.com');
+    });
+
+    it('should initialize and validate app correctly', () => {
+        const projectId = 'aulainfinity8-a6ac0';
+        const databaseId = 'ai-studio-aulainfinity-6be7791f-ef3e-4fc4-b45b-98918b1b57ca';
+        
+        const app = initializeApp({ projectId }, 'test-app');
+        expect(app.options.projectId).toBe(projectId);
+        
+        const db = getFirestore(app, databaseId);
+        expect(db).toBeDefined();
     });
 });

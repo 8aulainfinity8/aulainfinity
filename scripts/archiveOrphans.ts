@@ -1,4 +1,4 @@
-import admin from 'firebase-admin';
+import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 
 // Custom deep equality
@@ -31,15 +31,15 @@ async function main() {
     console.log(`Impersonated service account: ${impersonationEmail || 'None (Using Default ADC)'}`);
     console.log(`Mode: ${dryRun ? 'DRY_RUN' : 'LIVE'}`);
 
-    admin.initializeApp();
+    const app = initializeApp({ projectId });
 
     // Validate project
-    if (admin.app().options.projectId !== projectId) {
-        console.error(`Project ID mismatch! Expected ${projectId}, got ${admin.app().options.projectId}`);
+    if (app.options.projectId !== projectId) {
+        console.error(`Project ID mismatch! Expected ${projectId}, got ${app.options.projectId}`);
         process.exit(1);
     }
 
-    const db = getFirestore(admin.app(), databaseId);
+    const db = getFirestore(app, databaseId);
 
     const tasks = [
         {
