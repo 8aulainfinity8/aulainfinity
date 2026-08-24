@@ -1,8 +1,19 @@
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 
+export const ARCHIVE_TASKS = [
+    {
+        src: 'chats/legacy_chat_id_123/messages/orphan_chat_msg_x',
+        dst: 'archived_chat_messages/orphan_chat_msg_x'
+    },
+    {
+        src: 'tutoring_requests/orphan_tutor_req_y',
+        dst: 'archived_tutoring_requests/orphan_tutor_req_y'
+    }
+];
+
 // Custom deep equality
-function isDeepEqual(obj1: any, obj2: any): boolean {
+export function isDeepEqual(obj1: any, obj2: any): boolean {
     if (obj1 === obj2) return true;
     if (typeof obj1 !== 'object' || obj1 === null || typeof obj2 !== 'object' || obj2 === null) return false;
     const keys1 = Object.keys(obj1);
@@ -12,6 +23,12 @@ function isDeepEqual(obj1: any, obj2: any): boolean {
         if (!keys2.includes(key) || !isDeepEqual(obj1[key], obj2[key])) return false;
     }
     return true;
+}
+
+export function isValidDocumentPath(path: string): boolean {
+    if (!path || typeof path !== 'string') return false;
+    const segments = path.split('/').filter(Boolean);
+    return segments.length > 0 && segments.length % 2 === 0;
 }
 
 async function main() {
@@ -41,16 +58,19 @@ async function main() {
 
     const db = getFirestore(app, databaseId);
 
-    const tasks = [
-        {
-            src: 'chats/legacy_chat_id_123/messages/orphan_chat_msg_x',
-            dst: 'archived_data/chat_messages/orphan_chat_msg_x'
-        },
-        {
-            src: 'tutoring_requests/orphan_tutor_req_y',
-            dst: 'archived_data/tutoring_requests/orphan_tutor_req_y'
+    const tasks = ARCHIVE_TASKS;
+
+    // Validate all task paths are valid document paths (even number of segments)
+    for (const task of tasks) {
+        if (!isValidDocumentPath(task.src)) {
+            console.error(`Invalid source document path (must have even number of segments): ${task.src}`);
+            process.exit(1);
         }
-    ];
+        if (!isValidDocumentPath(task.dst)) {
+            console.error(`Invalid destination document path (must have even number of segments): ${task.dst}`);
+            process.exit(1);
+        }
+    }
 
     for (const task of tasks) {
         console.log(`\nProcessing ${task.src}...`);
@@ -97,7 +117,12 @@ async function main() {
     console.log("\nProcess complete.");
 }
 
-main().catch(err => {
-    console.error(err);
-    process.exit(1);
-});
+export { main };
+
+if (process.argv[1] && (process.argv[1].endsWith('archiveOrphans.ts') || process.argv[1].endsWith('archiveOrphans.js') || process.argv[1].includes('archiveOrphans'))) {
+    main().catch(err => {
+        console.error(err);
+        process.exit(1);
+    });
+}
+
