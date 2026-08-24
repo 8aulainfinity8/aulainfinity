@@ -17,6 +17,7 @@ function isDeepEqual(obj1: any, obj2: any): boolean {
 async function main() {
     const projectId = process.env.FIREBASE_PROJECT_ID;
     const databaseId = process.env.FIRESTORE_DATABASE_ID;
+    const impersonationEmail = process.env.FIREBASE_SERVICE_ACCOUNT_EMAIL;
     const dryRun = process.env.DRY_RUN !== 'false';
 
     if (!projectId || !databaseId) {
@@ -27,9 +28,10 @@ async function main() {
     console.log(`--- ARCHIVE SCRIPT ---`);
     console.log(`Project: ${projectId}`);
     console.log(`Database: ${databaseId}`);
+    console.log(`Impersonated service account: ${impersonationEmail || 'None (Using Default ADC)'}`);
     console.log(`Mode: ${dryRun ? 'DRY_RUN' : 'LIVE'}`);
 
-    admin.initializeApp({ projectId });
+    admin.initializeApp();
 
     // Validate project
     if (admin.app().options.projectId !== projectId) {
