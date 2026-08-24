@@ -1,64 +1,101 @@
-
 import admin from 'firebase-admin';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getFirestore } from 'firebase-admin/firestore';
 
-admin.initializeApp();
-
-if (process.env.GOOGLE_CLOUD_PROJECT !== "aulainfinity8-a6ac0") {
-    throw new Error(`CRITICAL: Project ID mismatch! Expected aulainfinity8-a6ac0, got ${process.env.GOOGLE_CLOUD_PROJECT}`);
+// Custom deep equality
+function isDeepEqual(obj1: any, obj2: any): boolean {
+    if (obj1 === obj2) return true;
+    if (typeof obj1 !== 'object' || obj1 === null || typeof obj2 !== 'object' || obj2 === null) return false;
+    const keys1 = Object.keys(obj1);
+    const keys2 = Object.keys(obj2);
+    if (keys1.length !== keys2.length) return false;
+    for (const key of keys1) {
+        if (!keys2.includes(key) || !isDeepEqual(obj1[key], obj2[key])) return false;
+    }
+    return true;
 }
 
-const db = getFirestore(admin.getApp(), "ai-studio-aulainfinity-6be7791f-ef3e-4fc4-b45b-98918b1b57ca");
+async function main() {
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    const databaseId = process.env.FIRESTORE_DATABASE_ID;
+    const dryRun = process.env.DRY_RUN !== 'false';
 
-const ARCHIVE_MAP = [
-    {
-        source: 'chats/legacy_chat_id_123/messages/orphan_chat_msg_x',
-        dest: 'archived_data/chat_messages/orphan_chat_msg_x',
-        reason: 'F108_ORPHAN'
-    },
-    {
-        source: 'tutoring_requests/orphan_tutor_req_y',
-        dest: 'archived_data/tutoring_requests/orphan_tutor_req_y',
-        reason: 'F108_ORPHAN'
+    if (!projectId || !databaseId) {
+        console.error("Missing FIREBASE_PROJECT_ID or FIRESTORE_DATABASE_ID");
+        process.exit(1);
     }
-];
 
-async function archiveOrphans(dryRun: boolean = true) {
-    for (const item of ARCHIVE_MAP) {
-        console.log(`Processing ${item.source}...`);
-        const sourceRef = db.doc(item.source);
-        const sourceDoc = await sourceRef.get();
-        
-        if (!sourceDoc.exists) {
-            console.error(`Source not found: ${item.source}`);
-            continue;
+    console.log(`--- ARCHIVE SCRIPT ---`);
+    console.log(`Project: ${projectId}`);
+    console.log(`Database: ${databaseId}`);
+    console.log(`Mode: ${dryRun ? 'DRY_RUN' : 'LIVE'}`);
+
+    admin.initializeApp({ projectId });
+
+    // Validate project
+    if (admin.app().options.projectId !== projectId) {
+        console.error(`Project ID mismatch! Expected ${projectId}, got ${admin.app().options.projectId}`);
+        process.exit(1);
+    }
+
+    const db = getFirestore(admin.app(), databaseId);
+
+    const tasks = [
+        {
+            src: 'chats/legacy_chat_id_123/messages/orphan_chat_msg_x',
+            dst: 'archived_data/chat_messages/orphan_chat_msg_x'
+        },
+        {
+            src: 'tutoring_requests/orphan_tutor_req_y',
+            dst: 'archived_data/tutoring_requests/orphan_tutor_req_y'
+        }
+    ];
+
+    for (const task of tasks) {
+        console.log(`\nProcessing ${task.src}...`);
+        const srcRef = db.doc(task.src);
+        const dstRef = db.doc(task.dst);
+
+        const srcSnap = await srcRef.get();
+        if (!srcSnap.exists) {
+            console.error(`Source not found: ${task.src}`);
+            process.exit(1);
         }
 
-        const data = sourceDoc.data();
-        const archiveData = {
-            ...data,
-            sourcePath: item.source,
-            archivedAt: FieldValue.serverTimestamp(),
-            archiveReason: item.reason,
-            originalDocumentId: sourceDoc.id
-        };
+        const srcData = srcSnap.data();
 
-        if (!dryRun) {
-            const destRef = db.doc(item.dest);
-            await destRef.set(archiveData);
-            
-            // Verify
-            const destDoc = await destRef.get();
-            if (destDoc.exists) {
-                await sourceRef.delete();
-                console.log(`Successfully archived ${item.source}`);
+        // Check dst
+        const dstSnap = await dstRef.get();
+        if (dstSnap.exists) {
+            const dstData = dstSnap.data();
+            if (isDeepEqual(srcData, dstData)) {
+                console.log(`Idempotency: Dest already exists and is identical. Skipping copy.`);
             } else {
-                throw new Error(`Verification failed for ${item.source}`);
+                console.error(`Abort: Dest exists and is DIFFERENT.`);
+                process.exit(1);
             }
         } else {
-            console.log(`Dry run: ${item.source} would be copied to ${item.dest}`);
+            if (dryRun) {
+                console.log(`[DRY RUN] Would copy ${task.src} to ${task.dst}`);
+            } else {
+                await dstRef.set(srcData!);
+                console.log(`Copied to ${task.dst}`);
+
+                // Verification
+                const dstSnapVerify = await dstRef.get();
+                if (!isDeepEqual(srcData, dstSnapVerify.data())) {
+                    console.error(`Abort: Deep equality failure.`);
+                    process.exit(1);
+                }
+
+                await srcRef.delete();
+                console.log(`Deleted source: ${task.src}`);
+            }
         }
     }
+    console.log("\nProcess complete.");
 }
 
-archiveOrphans(process.argv.includes('--dry-run')).catch(console.error);
+main().catch(err => {
+    console.error(err);
+    process.exit(1);
+});
