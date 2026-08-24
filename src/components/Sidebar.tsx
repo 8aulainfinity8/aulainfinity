@@ -15,6 +15,7 @@ import { useI18n } from '../hooks/useI18n';
 import { useStudyStreak } from '../hooks/useStudyStreak';
 import { useAuthorization } from '../hooks/useAuthorization';
 import { ThemeContext } from '../contexts/ThemeContext';
+import { StudentNotificationContext } from '../contexts/StudentNotificationContext';
 import { OFFICIAL_LOGO_PATH, OFFICIAL_ICON_PATH, handleImageError } from '../constants/branding';
 
 import { filterCoursesForTeacher } from '../utils/teacherPermissions';
@@ -111,6 +112,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ sidebarState, onItemClick }) =
     const { theme } = useContext(ThemeContext);
     const { appConfig } = useContext(AppConfigContext);
     const { unreadConversationsCount, pendingTutoringRequestsCount, pendingTopicRequestsCount } = useContext(AdminNotificationContext);
+    const studentNotifications = useContext(StudentNotificationContext);
     const { t } = useI18n();
     const navigate = useNavigate();
     const streakCount = useStudyStreak();
@@ -122,33 +124,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ sidebarState, onItemClick }) =
         queryFn: api.fetchCourses
     });
 
-    const { data: studentConversations } = useQuery<Conversation[]>({
-        queryKey: ['conversations'],
-        queryFn: api.fetchConversations,
-        enabled: !!user && user.role === 'student',
-        refetchInterval: 5000,
-    });
-
-    const { data: peerConversations } = useQuery<StudentPeerConversation[]>({
-        queryKey: ['peer-conversations', user?.id],
-        queryFn: () => api.fetchPeerConversations(user!.id),
-        enabled: !!user && user.role === 'student',
-        refetchInterval: 5000,
-    });
-
-    const unreadSupportCount = useMemo(() => {
-        if (!user || user.role !== 'student' || !studentConversations) return 0;
-        return studentConversations.filter(c => {
-            if (!c || !c.id) return false;
-            const belongsToStudent = c.studentId === user.id || c.id === user.id || c.id.startsWith(user.id + '_');
-            return belongsToStudent && !!c.unreadByStudent;
-        }).length;
-    }, [studentConversations, user]);
-
-    const unreadPeerCount = useMemo(() => {
-        if (!user || user.role !== 'student' || !peerConversations) return 0;
-        return peerConversations.filter(c => !!c.unreadByStudentId?.[user.id]).length;
-    }, [peerConversations, user]);
+    const unreadSupportCount = studentNotifications?.unreadSupportCount ?? 0;
+    const unreadPeerCount = studentNotifications?.unreadPeerCount ?? 0;
+    const unreadGroupCount = studentNotifications?.unreadGroupCount ?? 0;
+    const studentTutoringCount = studentNotifications?.pendingTutoringRequestsCount ?? 0;
 
     const handleLogout = () => {
         logout();
@@ -288,10 +267,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ sidebarState, onItemClick }) =
                                 {(isAdmin || ((appConfig?.aiEnabled !== false) && ((user as any)?.aiEnabled !== false))) && (
                                     <NavItem to={ROUTES.TUTOR_IA} icon={<SparklesIcon className="w-6 h-6 text-amber-500 dark:text-amber-400" />} label={t('sidebar.aiTutor')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} />
                                 )}
-                                <NavItem to={ROUTES.STUDY_GROUPS} icon={<UserGroupIcon className="w-6 h-6 text-pink-500 dark:text-pink-400" />} label={t('sidebar.studyGroups')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} state={{ activeChatType: 'group' }} />
+                                <NavItem to={ROUTES.STUDY_GROUPS} icon={<UserGroupIcon className="w-6 h-6 text-pink-500 dark:text-pink-400" />} label={t('sidebar.studyGroups')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} state={{ activeChatType: 'group' }} badgeCount={unreadGroupCount} />
                                 <NavItem to={ROUTES.STUDENT_CHAT} icon={<ChatBubbleLeftRightIcon className="w-6 h-6 text-indigo-500 dark:text-indigo-400" />} label={t('sidebar.studentChat')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} badgeCount={unreadPeerCount} />
                                 <NavItem to={ROUTES.CHAT} icon={<ChatBubbleLeftRightIcon className="w-6 h-6" />} label={t('sidebar.adminChat')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} badgeCount={unreadSupportCount} />
-                                <NavItem to={ROUTES.TUTORING} icon={<VideoCameraIcon className="w-6 h-6" />} label={t('sidebar.tutoring')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} />
+                                <NavItem to={ROUTES.TUTORING} icon={<VideoCameraIcon className="w-6 h-6" />} label={t('sidebar.tutoring')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} badgeCount={studentTutoringCount} />
                                 <NavItem to={ROUTES.REQUEST} icon={<LightBulbIcon className="w-6 h-6" />} label={t('sidebar.requests')} isSidebarOpen={isSidebarOpen} onItemClick={onItemClick} />
                             </>
                         ) : (

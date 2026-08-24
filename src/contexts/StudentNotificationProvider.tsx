@@ -1,17 +1,14 @@
 
 
-import React, { createContext, useEffect, useContext, ReactNode } from 'react';
+import React, { createContext, useEffect, useContext, ReactNode, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AuthContext } from './AuthContext';
 import { NotificationContext } from './NotificationContext';
+import { StudentNotificationContext } from './StudentNotificationContext';
 import * as api from '../services/api';
 import { eventEmitter } from '../services/eventService';
 import { findVideoById } from '../data/database';
-import type { Video, Comment as CommentType, StudentUser, CourseLevel, TutoringRequest } from '../types';
-
-// This context is just a provider wrapper for background logic,
-// it doesn't need to expose any values to consumers.
-const StudentNotificationContext = createContext<null>(null);
+import type { Video, Comment as CommentType, StudentUser, CourseLevel, TutoringRequest, Conversation, StudentPeerConversation, CourseGroupConversation } from '../types';
 
 export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const { user } = useContext(AuthContext);
@@ -31,6 +28,83 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
         enabled: !!user && user.role === 'student',
     });
 
+    // --- NEW: Centralized Student Chat Queries ---
+    const { 
+        data: studentConversations, 
+        isLoading: isConversationsLoading,
+        refetch: refetchConversations 
+    } = useQuery<Conversation[]>({
+        queryKey: ['conversations'],
+        queryFn: api.fetchConversations,
+        enabled: !!user && user.role === 'student',
+        refetchInterval: 5000,
+    });
+
+    const { 
+        data: peerConversations, 
+        isLoading: isPeerConversationsLoading,
+        refetch: refetchPeerConversations 
+    } = useQuery<StudentPeerConversation[]>({
+        queryKey: ['peer-conversations', user?.id],
+        queryFn: () => api.fetchPeerConversations(user!.id),
+        enabled: !!user && user.role === 'student',
+        refetchInterval: 5000,
+    });
+
+    const { 
+        data: groupConversations, 
+        isLoading: isGroupConversationsLoading,
+        refetch: refetchGroupConversations 
+    } = useQuery<CourseGroupConversation[]>({
+        queryKey: ['group-conversations', user?.id],
+        queryFn: () => api.fetchCourseGroupConversations(user!.id),
+        enabled: !!user && user.role === 'student',
+        refetchInterval: 5000,
+    });
+
+    const { 
+        data: tutoringRequests,
+        refetch: refetchTutoringRequests
+    } = useQuery<TutoringRequest[]>({
+        queryKey: ['tutoringRequests'],
+        queryFn: api.fetchTutoringRequests,
+        enabled: !!user && user.role === 'student',
+    });
+
+    // --- NEW: Centralized Student Unread Counts ---
+    const unreadSupportCount = useMemo(() => {
+        if (!user || user.role !== 'student' || !studentConversations) return 0;
+        return studentConversations.filter(c => {
+            if (!c || !c.id) return false;
+            const belongsToStudent = c.studentId === user.id || c.id === user.id || c.id.startsWith(user.id + '_');
+            return belongsToStudent && !!c.unreadByStudent;
+        }).length;
+    }, [studentConversations, user]);
+
+    const unreadPeerCount = useMemo(() => {
+        if (!user || user.role !== 'student' || !peerConversations) return 0;
+        return peerConversations.filter(c => !!c.unreadByStudentId?.[user.id]).length;
+    }, [peerConversations, user]);
+
+    const unreadGroupCount = useMemo(() => {
+        if (!user || user.role !== 'student' || !groupConversations) return 0;
+        return groupConversations.filter(c => !!c.unreadByUserId?.[user.id]).length;
+    }, [groupConversations, user]);
+
+    const pendingTutoringRequestsCount = useMemo(() => {
+        if (!user || user.role !== 'student' || !tutoringRequests) return 0;
+        // Count modifications proposed by teacher that haven't been seen by the student
+        return tutoringRequests.filter(req => 
+            req.modificationStatus === 'pending' && 
+            req.modificationRequestedBy === 'teacher' && 
+            req.studentId === user.id && 
+            !req.seenByStudent
+        ).length;
+    }, [tutoringRequests, user]);
+
+    const unreadStudentTotal = useMemo(() => {
+        return unreadSupportCount + unreadPeerCount + unreadGroupCount + pendingTutoringRequestsCount;
+    }, [unreadSupportCount, unreadPeerCount, unreadGroupCount, pendingTutoringRequestsCount]);
 
     useEffect(() => {
         if (!user || user.role !== 'student') return;
@@ -65,25 +139,57 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
 
         // Handler for tutoring status updates
         const handleTutoringUpdate = (tutoringRequest?: TutoringRequest | null) => {
+            refetchTutoringRequests();
             if (!tutoringRequest || !tutoringRequest.studentId) return;
             if (tutoringRequest.studentId === user.id && tutoringRequest.status !== 'pending') {
                 addToast(`El estado de tu petición de tutoría de ${tutoringRequest.subject} ha cambiado a: ${tutoringRequest.status}`, 'info');
             }
         };
 
+        const handleMessageUpdate = () => {
+            refetchConversations();
+            refetchPeerConversations();
+            refetchGroupConversations();
+        };
+
         eventEmitter.on('video-added', handleNewVideo);
         eventEmitter.on('comment-update', handleNewComment);
         eventEmitter.on('tutoring-update', handleTutoringUpdate);
+        eventEmitter.on('message-update', handleMessageUpdate);
+        eventEmitter.on('direct-message-update', handleMessageUpdate);
+        eventEmitter.on('peer-message-update', handleMessageUpdate);
+        eventEmitter.on('group-message-update', handleMessageUpdate);
 
         return () => {
             eventEmitter.off('video-added', handleNewVideo);
             eventEmitter.off('comment-update', handleNewComment);
             eventEmitter.off('tutoring-update', handleTutoringUpdate);
+            eventEmitter.off('message-update', handleMessageUpdate);
+            eventEmitter.off('direct-message-update', handleMessageUpdate);
+            eventEmitter.off('peer-message-update', handleMessageUpdate);
+            eventEmitter.off('group-message-update', handleMessageUpdate);
         };
-    }, [user, addToast, allComments, queryClient, allCourses]);
+    }, [user, addToast, allComments, queryClient, allCourses, refetchConversations, refetchPeerConversations, refetchGroupConversations, refetchTutoringRequests]);
+
+    const contextValue = {
+        unreadSupportCount,
+        unreadPeerCount,
+        unreadGroupCount,
+        unreadStudentTotal,
+        pendingTutoringRequestsCount,
+        studentConversations,
+        peerConversations,
+        groupConversations,
+        isConversationsLoading,
+        isPeerConversationsLoading,
+        isGroupConversationsLoading,
+        refetchConversations,
+        refetchPeerConversations,
+        refetchGroupConversations
+    };
 
     return (
-        <StudentNotificationContext.Provider value={null}>
+        <StudentNotificationContext.Provider value={contextValue}>
             {children}
         </StudentNotificationContext.Provider>
     );

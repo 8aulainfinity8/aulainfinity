@@ -554,9 +554,14 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
 
     // Mark as read immediately when active chat changes or receiving messages
     useEffect(() => {
-        if (activeConvoId && studentId && activeChatType === 'private') {
-            markAsRead();
-            queryClient.invalidateQueries({ queryKey: ['peer-conversations', studentId] });
+        if (activeConvoId && studentId) {
+            if (activeChatType === 'private') {
+                markAsRead();
+                queryClient.invalidateQueries({ queryKey: ['peer-conversations', studentId] });
+            } else if (activeChatType === 'group') {
+                api.markCourseGroupAsRead(activeConvoId, studentId);
+                queryClient.invalidateQueries({ queryKey: ['group-conversations', studentId] });
+            }
         }
     }, [activeConvoId, activeChatType, studentId, messages?.length, queryClient, markAsRead]);
 

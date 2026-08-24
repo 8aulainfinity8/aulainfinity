@@ -148,7 +148,7 @@ export const TutoringPage: React.FC = () => {
     React.useEffect(() => {
         if (user && user.role === 'student') {
             api.markTutoringRequestsAsSeen('student', user.id);
-            queryClient.invalidateQueries({ queryKey: ['tutoring-requests'] });
+            queryClient.invalidateQueries({ queryKey: ['tutoringRequests'] });
         }
     }, [user, queryClient]);
 
@@ -420,7 +420,7 @@ export const TutoringPage: React.FC = () => {
 
             addToast(`¡Reserva realizada con éxito para el ${slot.date} a las ${slot.time} con ${teacherName}! Se ha descontado 1 Infinity de tu saldo.`, 'success');
             queryClient.invalidateQueries({ queryKey: ['tutoringRequests'] });
-            queryClient.invalidateQueries({ queryKey: ['tutoring-requests'] });
+            queryClient.invalidateQueries({ queryKey: [['tutoringRequests']] });
             eventEmitter.emit('tutoring-requests-updated');
             eventEmitter.emit('tutoring-update');
             setSelectedSlotId(null);
@@ -495,7 +495,7 @@ export const TutoringPage: React.FC = () => {
 
             addToast(`¡Solicitud de tutoría enviada con éxito! Se ha descontado 1 Infinity de tu saldo. Se ha notificado al profesor ${teacherName} y a administración para su visto bueno.`, 'success');
             queryClient.invalidateQueries({ queryKey: ['tutoringRequests'] });
-            queryClient.invalidateQueries({ queryKey: ['tutoring-requests'] });
+            queryClient.invalidateQueries({ queryKey: [['tutoringRequests']] });
             eventEmitter.emit('tutoring-requests-updated');
             eventEmitter.emit('tutoring-update');
             setSelectedSlotId(null);
@@ -1504,7 +1504,7 @@ export const TutoringPage: React.FC = () => {
                                             await api.deleteTutoringRequest(target.id);
                                             addToast('Reserva de tutoría anulada con éxito. Se ha reembolsado 1 Infinity a tu saldo.', 'success');
                                             queryClient.invalidateQueries({ queryKey: ['tutoringRequests'] });
-                                            queryClient.invalidateQueries({ queryKey: ['tutoring-requests'] });
+                                            queryClient.invalidateQueries({ queryKey: [['tutoringRequests']] });
                                             queryClient.invalidateQueries({ queryKey: ['users'] });
                                             queryClient.invalidateQueries({ queryKey: ['user'] });
                                             eventEmitter.emit('tutoring-requests-updated');

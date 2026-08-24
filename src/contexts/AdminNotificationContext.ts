@@ -1,5 +1,5 @@
 import { createContext } from 'react';
-import type { TopicRequest, TutoringRequest, Conversation, StudentUser } from '../types';
+import type { TopicRequest, TutoringRequest, Conversation, StudentUser, CourseGroupConversation } from '../types';
 
 export interface AdminNotificationContextType {
   newUsersCount: number;
@@ -17,7 +17,9 @@ export interface AdminNotificationContextType {
   refetchTutoringRequests: () => void;
 
   unreadConversationsCount: number;
+  unreadGroupCount: number;
   conversations: Conversation[] | undefined;
+  groupConversations: CourseGroupConversation[] | undefined;
   isConversationsLoading: boolean;
   isConversationsError: boolean;
   refetchConversations: () => void;
@@ -56,7 +58,9 @@ export const AdminNotificationContext = createContext<AdminNotificationContextTy
   refetchTutoringRequests: () => {},
 
   unreadConversationsCount: 0,
+  unreadGroupCount: 0,
   conversations: undefined,
+  groupConversations: undefined,
   isConversationsLoading: true,
   isConversationsError: false,
   refetchConversations: () => {},

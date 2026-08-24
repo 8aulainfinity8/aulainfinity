@@ -1794,6 +1794,10 @@ export const fetchCourseGroupMessages = async (courseId: string): Promise<Course
     return dbMock.dbFetchCourseGroupMessages(courseId);
 };
 
+export const markCourseGroupAsRead = async (courseId: string, userId: string): Promise<{ success: boolean }> => {
+    return dbMock.dbMarkCourseGroupAsRead(courseId, userId);
+};
+
 export const sendCourseGroupMessage = async (messageData: { courseId: string; senderId: string; text: string; attachments?: Attachment[] }): Promise<CourseGroupMessage> => {
     const msg = dbMock.dbSendCourseGroupMessage(messageData);
     syncSendCourseGroupMessageToFirestore(msg).catch(console.error);

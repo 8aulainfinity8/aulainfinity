@@ -40,7 +40,7 @@ export const AdminTutoringRequestsPage: React.FC = () => {
     React.useEffect(() => {
         if (user) {
             api.markTutoringRequestsAsSeen(user.role as any, user.id);
-            queryClient.invalidateQueries({ queryKey: ['tutoring-requests'] });
+            queryClient.invalidateQueries({ queryKey: ['tutoringRequests'] });
         }
     }, [user, queryClient]);
 

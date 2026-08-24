@@ -8,6 +8,7 @@ import { ROUTES } from '../constants/routes';
 import { AuthContext } from '../contexts/AuthContext';
 import { useAuthorization } from '../hooks/useAuthorization';
 import { AdminNotificationContext } from '../contexts/AdminNotificationContext';
+import { StudentNotificationContext } from '../contexts/StudentNotificationContext';
 import { AppConfigContext } from '../contexts/AppConfigContext';
 import { useI18n } from '../hooks/useI18n';
 
@@ -84,40 +85,13 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = React.memo(({ onM
     const { user, isTeacher, isAdmin } = useAuthorization();
     const { t } = useI18n();
     const { appConfig } = useContext(AppConfigContext);
-    const { unreadConversationsCount = 0, pendingTutoringRequestsCount = 0, pendingTopicRequestsCount = 0 } = useContext(AdminNotificationContext) || {};
-    const totalTeacherBadge = unreadConversationsCount + pendingTutoringRequestsCount + pendingTopicRequestsCount;
+    const { unreadConversationsCount = 0, unreadGroupCount = 0, pendingTutoringRequestsCount = 0, pendingTopicRequestsCount = 0 } = useContext(AdminNotificationContext) || {};
+    const studentNotifications = useContext(StudentNotificationContext);
+    const totalTeacherBadge = unreadConversationsCount + unreadGroupCount + pendingTutoringRequestsCount + pendingTopicRequestsCount;
 
-    const { data: studentConversations } = useQuery<Conversation[]>({
-        queryKey: ['conversations'],
-        queryFn: api.fetchConversations,
-        enabled: !!user && user.role === 'student',
-        refetchInterval: 5000,
-    });
-
-    const { data: peerConversations } = useQuery<StudentPeerConversation[]>({
-        queryKey: ['peer-conversations', user?.id],
-        queryFn: () => api.fetchPeerConversations(user!.id),
-        enabled: !!user && user.role === 'student',
-        refetchInterval: 5000,
-    });
-
-    const unreadSupportCount = useMemo(() => {
-        if (!user || user.role !== 'student') return 0;
-        return studentConversations?.filter(c => {
-            if (!c || !c.id) return false;
-            const belongsToStudent = c.studentId === user.id || c.id === user.id || c.id.startsWith(user.id + '_');
-            return belongsToStudent && !!c.unreadByStudent;
-        }).length || 0;
-    }, [studentConversations, user]);
-
-    const unreadPeerCount = useMemo(() => {
-        if (!user || user.role !== 'student') return 0;
-        return peerConversations?.filter(c => !!c.unreadByStudentId?.[user.id]).length || 0;
-    }, [peerConversations, user]);
-
-    const unreadStudentTotal = useMemo(() => {
-        return unreadSupportCount + unreadPeerCount;
-    }, [unreadSupportCount, unreadPeerCount]);
+    const unreadSupportCount = studentNotifications?.unreadSupportCount ?? 0;
+    const unreadPeerCount = studentNotifications?.unreadPeerCount ?? 0;
+    const unreadStudentTotal = studentNotifications?.unreadStudentTotal ?? 0;
 
     const isAiAllowed = isAdmin || ((appConfig?.aiEnabled !== false) && ((user as any)?.aiEnabled !== false));
 
@@ -222,9 +196,14 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = React.memo(({ onM
                                         {unreadPeerCount > 9 ? '9+' : unreadPeerCount}
                                     </span>
                                 )}
-                                {item.to === ROUTES.CHAT && unreadSupportCount > 0 && (
+                                {item.to === ROUTES.CHAT && (
+                                    (isTeacher ? unreadConversationsCount : unreadSupportCount) > 0
+                                ) && (
                                     <span className="absolute -top-1.5 -right-1.5 bg-emerald-500 text-white text-[8px] font-black rounded-full h-3.5 w-3.5 flex items-center justify-center border border-slate-900 animate-pulse shadow-md">
-                                        {unreadSupportCount > 9 ? '9+' : unreadSupportCount}
+                                        {isTeacher 
+                                            ? (unreadConversationsCount > 9 ? '9+' : unreadConversationsCount)
+                                            : (unreadSupportCount > 9 ? '9+' : unreadSupportCount)
+                                        }
                                     </span>
                                 )}
                                 {item.to === ROUTES.ADMIN_CHAT && unreadConversationsCount > 0 && (

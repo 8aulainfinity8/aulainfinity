@@ -1713,7 +1713,7 @@ export const AgendaPage: React.FC = () => {
             addToast('Reserva de tutoría anulada con éxito. Se ha reembolsado 1 Infinity a tu saldo.', 'success');
             if (refetchTutoringRequests) refetchTutoringRequests();
             queryClient.invalidateQueries({ queryKey: ['tutoringRequests'] });
-            queryClient.invalidateQueries({ queryKey: ['tutoring-requests'] });
+            queryClient.invalidateQueries({ queryKey: ['tutoringRequests'] });
             queryClient.invalidateQueries({ queryKey: ['users'] });
             queryClient.invalidateQueries({ queryKey: ['user'] });
             setTutoringToCancel(null);

@@ -264,18 +264,33 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }, [setUser]);
 
     const login = useCallback((userData: AnyUser) => {
-        if (auth && auth.currentUser) {
-            if (auth.currentUser.email?.toLowerCase() === userData.email?.toLowerCase()) {
-                if (!auth.currentUser.emailVerified) {
+        const firebaseUser = auth.currentUser;
+        const uid = firebaseUser?.uid;
+
+        if (auth && firebaseUser) {
+            if (firebaseUser.email?.toLowerCase() === userData.email?.toLowerCase()) {
+                if (!firebaseUser.emailVerified) {
                     console.warn("⚠️ Intento de login bloqueado: El usuario no ha verificado su correo electrónico.");
                     throw new Error("⚠️ Tu correo electrónico aún no ha sido verificado. Por favor, revisa tu bandeja de entrada o carpeta de spam y haz clic en el enlace de confirmación antes de iniciar sesión.");
                 }
             }
         }
-        setUser(userData);
-        initializeAndSyncUserDataInFirestore(userData, userData.role as any).catch(err => {
-            console.warn('Sync user data non-critical failure:', err);
-        });
+
+        // Normalize identity: prioritize Firebase Auth UID over Mock/Domain ID
+        const normalizedUser = {
+            ...userData,
+            id: uid || userData.id,
+            uid: uid || userData.id,
+            firebaseUid: uid || userData.firebaseUid || userData.id
+        };
+
+        setUser(normalizedUser);
+        
+        if (uid) {
+            initializeAndSyncUserDataInFirestore(normalizedUser, normalizedUser.role as any, uid).catch(err => {
+                console.warn('Sync user data non-critical failure:', err);
+            });
+        }
     }, [setUser]);
 
     const logout = useCallback(() => {

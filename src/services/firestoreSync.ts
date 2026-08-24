@@ -1280,19 +1280,26 @@ export const syncSendDirectMessageToFirestore = async (msg: DirectMessage) => {
         // Also sync direct conversation document and unread status
         if (msg.conversationId) {
             const isStudent = msg.senderRole === 'student';
-            const { studentId, teacherId } = api.parseConversationParticipants(msg.conversationId);
-            const isTeacherConvo = !!teacherId;
-            await safeSetDoc(doc(db, 'firestore_conversations', msg.conversationId), {
+            const { studentId, teacherId: idTeacherId } = api.parseConversationParticipants(msg.conversationId);
+            const isTeacherConvo = !!idTeacherId;
+            
+            const conversationUpdate: any = {
                 id: msg.conversationId,
-                studentId: studentId || msg.senderId,
-                teacherId: teacherId || null,
+                studentId: studentId || (isStudent ? msg.senderId : undefined),
                 lastMessageText: msg.text,
                 lastMessageTimestamp: msg.timestamp || new Date().toISOString(),
                 unreadByAdmin: isStudent && !isTeacherConvo,
-                unreadByTeacher: isStudent && isTeacherConvo,
+                unreadByTeacher: isStudent, // Mark as unread for Teacher if one is assigned (preserved by merge)
                 unreadByStudent: !isStudent,
                 updatedAt: serverTimestamp()
-            }, { merge: true });
+            };
+
+            // Only overwrite teacherId if it's explicitly part of the direct chat ID format (e.g. student_teacher)
+            if (isTeacherConvo) {
+                conversationUpdate.teacherId = idTeacherId;
+            }
+
+            await safeSetDoc(doc(db, 'firestore_conversations', msg.conversationId), conversationUpdate, { merge: true });
         }
     } catch (e) {
         console.warn('Failed to push direct message to Firestore:', e);

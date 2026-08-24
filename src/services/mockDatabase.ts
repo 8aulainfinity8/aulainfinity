@@ -1840,6 +1840,15 @@ export const dbRequestTutoringModification = (
     request.modificationRequestedBy = requesterRole;
     request.modificationStatus = 'pending';
 
+    // Reset seen flags so the other party sees the badge
+    if (requesterRole === 'student') {
+        request.seenByTeacher = false;
+        request.seenByAdmin = false;
+    } else {
+        request.seenByStudent = false;
+        request.seenByAdmin = false;
+    }
+
     // When modified, return to pending status until verified by teacher and admin
     request.status = 'pending';
     request.teacherApproved = false;
@@ -2218,6 +2227,41 @@ export const dbSendMessage = (messageData: Omit<DirectMessage, 'id' | 'timestamp
 
     const newMessage: DirectMessage = { ...messageData, id: `msg${Date.now()}`, timestamp: new Date().toISOString() };
     directMessagesData.push(newMessage);
+
+    // Update or create the corresponding conversation in conversationsData consistently
+    const conversationId = messageData.conversationId;
+    let convo = conversationsData.find(c => c.id === conversationId || c.id === cleanId || c.id.replace(/^direct_/, '') === cleanId);
+    if (!convo) {
+        const studentId = cleanId;
+        const student = usersData.find(u => u.id === studentId);
+        const newConvo: Conversation = {
+            id: conversationId,
+            studentId: studentId,
+            studentName: student ? student.name : 'Estudiante',
+            lastMessageText: newMessage.text,
+            lastMessageTimestamp: newMessage.timestamp,
+            unreadByAdmin: false,
+            unreadByTeacher: false,
+            unreadByStudent: false,
+            teacherId: student?.assignedTeacherId || undefined
+        };
+        conversationsData.push(newConvo);
+        convo = newConvo;
+    } else {
+        convo.lastMessageText = newMessage.text;
+        convo.lastMessageTimestamp = newMessage.timestamp;
+    }
+
+    if (newMessage.senderRole === 'student') {
+        convo.unreadByAdmin = true;
+        convo.unreadByTeacher = true;
+        convo.unreadByStudent = false;
+    } else if (newMessage.senderRole === 'admin' || newMessage.senderRole === 'teacher') {
+        convo.unreadByAdmin = false;
+        convo.unreadByTeacher = false;
+        convo.unreadByStudent = true;
+    }
+
     eventEmitter.emit('message-update', newMessage);
     return JSON.parse(JSON.stringify(newMessage));
 };
@@ -2829,6 +2873,7 @@ export const dbSearchStudents = (studentId: string, searchVal: string): (Student
 // --- STUDENT COURSE GROUP CHATS ---
 
 export let courseGroupMessagesData: CourseGroupMessage[] = [];
+export let courseGroupUnreadStates: Record<string, Record<string, boolean>> = {}; // courseId -> userId -> boolean
 
 export const dbFetchCourseGroupConversations = (studentId: string): CourseGroupConversation[] => {
     const student = usersData.find(u => u.id === studentId);
@@ -2858,12 +2903,15 @@ export const dbFetchCourseGroupConversations = (studentId: string): CourseGroupC
             ? groupMessages[groupMessages.length - 1] 
             : null;
 
+        const unreadByUserId = courseGroupUnreadStates[courseId] || {};
+
         return {
             id: courseId,
             name: courseName,
             lastMessageText: lastMsg ? `${lastMsg.senderName}: ${lastMsg.text}` : 'Aún no hay mensajes. ¡Escribe el primero!',
             lastMessageTimestamp: lastMsg ? lastMsg.timestamp : (student?.registrationDate || new Date().toISOString()),
-            enrolledStudentsCount
+            enrolledStudentsCount,
+            unreadByUserId
         };
     }).sort((a, b) => new Date(b.lastMessageTimestamp).getTime() - new Date(a.lastMessageTimestamp).getTime());
 };
@@ -2887,10 +2935,39 @@ export const dbSendCourseGroupMessage = (messageData: { courseId: string; sender
 
     courseGroupMessagesData.push(newMessage);
 
+    // Update unread states for all other participants in the course
+    if (!courseGroupUnreadStates[messageData.courseId]) {
+        courseGroupUnreadStates[messageData.courseId] = {};
+    }
+
+    // Get all students enrolled in this course
+    const enrolledStudents = usersData.filter(u => u.enrolledCourseIds?.includes(messageData.courseId));
+    // Get all teachers teaching this course (taughtCourseIds)
+    const teachingTeachers = teachersData.filter(t => t.taughtCourseIds?.includes(messageData.courseId) || t.coursesTaughtIds?.includes(messageData.courseId));
+
+    enrolledStudents.forEach(u => {
+        if (u.id !== messageData.senderId) {
+            courseGroupUnreadStates[messageData.courseId][u.id] = true;
+        }
+    });
+    teachingTeachers.forEach(t => {
+        if (t.id !== messageData.senderId) {
+            courseGroupUnreadStates[messageData.courseId][t.id] = true;
+        }
+    });
+
     // Emit live group message event so real-time updates are pushed automatically
     eventEmitter.emit('group-message-update', newMessage);
 
     return newMessage;
+};
+
+export const dbMarkCourseGroupAsRead = (courseId: string, userId: string): { success: boolean } => {
+    if (!courseGroupUnreadStates[courseId]) {
+        courseGroupUnreadStates[courseId] = {};
+    }
+    courseGroupUnreadStates[courseId][userId] = false;
+    return { success: true };
 };
 
 export const dbFetchClassmatesOfSameLevel = (studentId: string): (StudentFriend & { isConnected: boolean; courseNames: string[] })[] => {

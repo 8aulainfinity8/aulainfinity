@@ -405,6 +405,7 @@ export interface CourseGroupConversation {
   lastMessageText: string;
   lastMessageTimestamp: string;
   enrolledStudentsCount: number;
+  unreadByUserId?: { [userId: string]: boolean };
 }
 
 // FIX: Added IconComponentType to resolve type errors in iconMap.ts.

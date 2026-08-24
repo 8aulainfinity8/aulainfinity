@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import * as api from '../services/api';
 import { AdminNotificationContext } from './AdminNotificationContext';
 import { AuthContext } from './AuthContext';
-import { StudentUser, TeacherUser, TopicRequest, TutoringRequest, Conversation, TeacherPayment, StudentPayment } from '../types';
+import { StudentUser, TeacherUser, TopicRequest, TutoringRequest, Conversation, TeacherPayment, StudentPayment, CourseGroupConversation } from '../types';
 import { eventEmitter } from '../services/eventService';
 import { NotificationContext } from './NotificationContext';
 import { AppConfigContext } from './AppConfigContext';
@@ -91,6 +91,16 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
     refetchInterval: 3000,
   });
 
+  const { 
+    data: groupConversations, 
+    refetch: refetchGroupConversations 
+  } = useQuery<CourseGroupConversation[]>({
+    queryKey: ['group-conversations', user?.id],
+    queryFn: () => api.fetchCourseGroupConversations(user!.id),
+    enabled: !!user && (user.role === 'admin' || user.role === 'teacher'),
+    refetchInterval: 5000,
+  });
+
   const {
     data: teacherPayments,
     isLoading: isTeacherPaymentsLoading,
@@ -151,6 +161,7 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
         if (messageTimer) clearTimeout(messageTimer);
         messageTimer = setTimeout(() => {
           refetchConversations();
+          refetchGroupConversations();
         }, 500);
       }
     };
@@ -189,6 +200,8 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
     eventEmitter.on('message-update', handleMessageUpdate);
     eventEmitter.on('direct-message-update', handleMessageUpdate);
     eventEmitter.on('peer-message-update', handleMessageUpdate);
+    eventEmitter.on('group-message-update', handleMessageUpdate);
+    eventEmitter.on('course-group-message-update', handleMessageUpdate);
     eventEmitter.on('teacher-payment-created', handleTeacherPaymentUpdate);
     eventEmitter.on('subscription-update', handleTeacherPaymentUpdate); // Subscriptions can trigger state changes
     eventEmitter.on('student-payment-created', handleStudentPaymentUpdate);
@@ -215,6 +228,8 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
       eventEmitter.off('message-update', handleMessageUpdate);
       eventEmitter.off('direct-message-update', handleMessageUpdate);
       eventEmitter.off('peer-message-update', handleMessageUpdate);
+      eventEmitter.off('group-message-update', handleMessageUpdate);
+      eventEmitter.off('course-group-message-update', handleMessageUpdate);
       eventEmitter.off('teacher-payment-created', handleTeacherPaymentUpdate);
       eventEmitter.off('subscription-update', handleTeacherPaymentUpdate);
       eventEmitter.off('student-payment-created', handleStudentPaymentUpdate);
@@ -231,14 +246,25 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
 
   const pendingTutoringRequestsCount = useMemo(() => {
     if (!tutoringRequests) return 0;
-    // For teachers, count pending tutoring requests assigned to them OR matching their subject
+    
+    // For teachers, count:
+    // 1. New pending requests assigned/matching subject
+    // 2. Pending modifications requested by student
     if (user?.role === 'teacher') {
-      return tutoringRequests.filter(req => 
-        req.status === 'pending' && !req.seenByTeacher && isTutoringRequestForTeacher(req, user, teachers)
-      ).length;
+      return tutoringRequests.filter(req => {
+        const isNewPending = req.status === 'pending' && !req.seenByTeacher && isTutoringRequestForTeacher(req, user, teachers);
+        const isPendingModification = req.modificationStatus === 'pending' && req.modificationRequestedBy === 'student' && req.teacherId === user.id && !req.seenByTeacher;
+        return isNewPending || isPendingModification;
+      }).length;
     }
-    // For admin, count all unseen pending requests
-    return tutoringRequests.filter(req => req.status === 'pending' && !req.seenByAdmin).length;
+
+    // For admin, count:
+    // 1. New pending requests where no teacher is assigned or matching admin logic
+    // 2. All pending modifications to oversee
+    return tutoringRequests.filter(req => 
+      (req.status === 'pending' && !req.seenByAdmin) || 
+      (req.modificationStatus === 'pending' && !req.seenByAdmin)
+    ).length;
   }, [tutoringRequests, user, teachers]);
 
   const unreadConversationsCount = useMemo(() => {
@@ -254,6 +280,11 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
     }
     return conversations.filter(c => !!c.unreadByAdmin).length;
   }, [conversations, user, users]);
+
+  const unreadGroupCount = useMemo(() => {
+    if (!groupConversations || !user) return 0;
+    return groupConversations.filter(c => !!c.unreadByUserId?.[user.id]).length;
+  }, [groupConversations, user]);
 
   const pendingTeacherPayments = useMemo(() => {
     if (!tutoringRequests || !teacherPayments) return [];
@@ -629,7 +660,9 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
       isTutoringRequestsError: isTutoringError,
       refetchTutoringRequests,
       unreadConversationsCount,
+      unreadGroupCount,
       conversations,
+      groupConversations,
       isConversationsLoading,
       isConversationsError,
       refetchConversations,
