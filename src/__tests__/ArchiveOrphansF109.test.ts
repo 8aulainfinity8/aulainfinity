@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { ARCHIVE_TASKS, isDeepEqual, isValidDocumentPath } from '../../scripts/archiveOrphans';
+import { OrphanAuditResult } from '../../scripts/discoverOrphans';
 
-describe('Archive Orphans Script - F109.11.1 Verification', () => {
+describe('Archive Orphans & Discovery Script - F109.11.3 Verification', () => {
     it('should validate environment variables', () => {
         process.env.FIREBASE_PROJECT_ID = 'aulainfinity8-a6ac0';
         process.env.FIRESTORE_DATABASE_ID = 'ai-studio-aulainfinity-6be7791f-ef3e-4fc4-b45b-98918b1b57ca';
@@ -21,7 +22,7 @@ describe('Archive Orphans Script - F109.11.1 Verification', () => {
         const projectId = 'aulainfinity8-a6ac0';
         const databaseId = 'ai-studio-aulainfinity-6be7791f-ef3e-4fc4-b45b-98918b1b57ca';
         
-        const app = initializeApp({ projectId }, 'test-app-f109-11-1');
+        const app = initializeApp({ projectId }, 'test-app-f109-11-3');
         expect(app.options.projectId).toBe(projectId);
         
         const db = getFirestore(app, databaseId);
@@ -48,6 +49,20 @@ describe('Archive Orphans Script - F109.11.1 Verification', () => {
         expect(isValidDocumentPath('single_collection')).toBe(false);
         expect(isValidDocumentPath('col/doc/subcol')).toBe(false);
         expect(isValidDocumentPath('col/doc/subcol/subdoc')).toBe(true);
+    });
+
+    it('should verify discovery result structure supports non-blocking NOT_FOUND states', () => {
+        const sampleResult: OrphanAuditResult = {
+            target: 'orphan_chat_msg_x',
+            expectedPath: 'chats/legacy_chat_id_123/messages/orphan_chat_msg_x',
+            exists: false,
+            status: 'NOT_FOUND',
+            archivedExists: false,
+            alternateMatches: []
+        };
+
+        expect(sampleResult.status).toBe('NOT_FOUND');
+        expect(sampleResult.exists).toBe(false);
     });
 
     it('should correctly evaluate isDeepEqual for identical and different objects', () => {
