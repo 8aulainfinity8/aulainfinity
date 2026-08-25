@@ -94,14 +94,18 @@ export const AuthContext = createContext<AuthContextType>({
   updateUser: () => {},
 });
 
+import { getF11045Meta } from '../utils/f11045';
+
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const instanceIdRef = React.useRef(Math.random().toString(36).substring(2, 9));
     const instanceId = instanceIdRef.current;
 
     useEffect(() => {
         console.log(`[AUTH DEBUG] AuthProvider MOUNT instanceId: ${instanceId}`);
+        console.log(`[F110.45] AUTH_PROVIDER_MOUNT | ${getF11045Meta(instanceId)}`);
         return () => {
             console.log(`[AUTH DEBUG] AuthProvider UNMOUNT instanceId: ${instanceId}`);
+            console.log(`[F110.45] AUTH_PROVIDER_UNMOUNT | ${getF11045Meta(instanceId)}`);
         };
     }, [instanceId]);
 
@@ -218,6 +222,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             }
 
             if (syncId === currentSyncId) {
+                console.log(`[F110.30] [AUTH_READY] | timestamp: ${performance.now()} | instanceId: ${instanceId}`);
+                console.log(`[F110.30] [APP_READY_AFTER_AUTH] | timestamp: ${performance.now()} | instanceId: ${instanceId}`);
                 setIsFirebaseAuthReady(true);
                 setFirebaseAuthLoading(false);
             }
@@ -227,12 +233,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         console.log(`[AUTH DEBUG] onIdTokenChanged SUBSCRIBE instanceId: ${instanceId}`);
 
         const unsubscribeAuth = onAuthStateChanged(auth, (fbUser) => {
+            if (typeof window !== 'undefined') {
+                (window as any).__FIREBASE_AUTH_UID__ = fbUser?.uid || 'none';
+            }
+            console.log(`[F110.45] AUTH_STATE_CHANGE | ${getF11045Meta(instanceId, fbUser?.uid)} | hasUser: ${!!fbUser}`);
             const shouldForce = !initialAuthChecked;
             initialAuthChecked = true;
             syncFirebaseUser(fbUser, shouldForce);
         });
 
         const unsubscribeToken = onIdTokenChanged(auth, (fbUser) => {
+            if (typeof window !== 'undefined') {
+                (window as any).__FIREBASE_AUTH_UID__ = fbUser?.uid || 'none';
+            }
+            console.log(`[F110.45] ID_TOKEN_CHANGE | ${getF11045Meta(instanceId, fbUser?.uid)} | hasUser: ${!!fbUser}`);
             // onIdTokenChanged se ejecuta ante cualquier actualización de token.
             // Se debe pasar forceRefresh=false para evitar un ciclo infinito de refresh y quota-exceeded.
             syncFirebaseUser(fbUser, false);

@@ -21,6 +21,8 @@ export interface AdminNotificationContextType {
   conversations: Conversation[] | undefined;
   groupConversations: CourseGroupConversation[] | undefined;
   isConversationsLoading: boolean;
+  isConversationsPending?: boolean;
+  isConversationsFetching?: boolean;
   isConversationsError: boolean;
   refetchConversations: () => void;
 
@@ -62,6 +64,8 @@ export const AdminNotificationContext = createContext<AdminNotificationContextTy
   conversations: undefined,
   groupConversations: undefined,
   isConversationsLoading: true,
+  isConversationsPending: true,
+  isConversationsFetching: false,
   isConversationsError: false,
   refetchConversations: () => {},
 

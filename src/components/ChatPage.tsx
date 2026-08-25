@@ -57,7 +57,7 @@ export const ChatPage: React.FC = () => {
         queryKey: ['conversations'],
         queryFn: api.fetchConversations,
         enabled: !!studentId,
-        refetchInterval: 5000,
+        staleTime: 30000,
     });
 
     const activeTeacherUid = activeChannel.type === 'teacher' && activeChannel.teacher ? resolveUserUid(activeChannel.teacher) : '';

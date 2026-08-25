@@ -18,6 +18,7 @@ import {
 import { eventEmitter } from './eventService';
 import * as dbMock from './mockDatabase';
 import * as api from './api';
+import { listenerTracker } from './listenerTracker';
 import { DirectMessage, StudentPeerMessage, CourseGroupMessage, Attachment } from '../types';
 
 let isInitialized = false;
@@ -108,6 +109,7 @@ export const initFirestoreSync = () => {
         resetFirestoreSync();
     }
 
+    console.log(`[F110.30] [FSYNC_READY] | timestamp: ${performance.now()}`);
     isInitialized = true;
     currentInitializedUid = currentUser.uid;
     console.log(`[FirestoreSync] Initializing real-time Firestore listeners for user ${currentUser.uid}`);
@@ -120,9 +122,15 @@ export const initFirestoreSync = () => {
         const isTeacherRole = isEmailVerified && currentAuth && currentUserObj?.role === 'teacher';
 
         const onSnapshot: typeof originalOnSnapshot = (refOrQuery: any, ...args: any[]): any => {
-            const unsub = (originalOnSnapshot as any)(refOrQuery, ...args);
-            activeUnsubscribes.push(unsub);
-            return unsub;
+            const rawPath = refOrQuery?._query?.path?.canonicalString?.() || refOrQuery?.path || refOrQuery?._path?.canonicalString?.() || 'firestore_query';
+            const listenerId = listenerTracker.register('firestoreSync', String(rawPath), 'query');
+            const originalUnsub = (originalOnSnapshot as any)(refOrQuery, ...args);
+            const wrappedUnsub = () => {
+                listenerTracker.cleanup(listenerId);
+                if (typeof originalUnsub === 'function') originalUnsub();
+            };
+            activeUnsubscribes.push(wrappedUnsub);
+            return wrappedUnsub;
         };
 
         // 0. Sync deleted items blacklist across browser reloads
@@ -405,59 +413,7 @@ export const initFirestoreSync = () => {
         }, (err: any) => handleSyncError('Firestore course chat sync:', err));
         }
 
-        // 4.5. Voice / Video Rooms real-time sync for Instant Call Alerts
-        const actualIsApprovedTeacher = isEmailVerified && (currentUserObj?.role === 'admin' || (currentUserObj?.role === 'teacher' && (currentUserObj as any).isApprovedForTutoring === true));
-        if (actualIsApprovedTeacher) {
-            const voice_group_callsRef = collection(db, 'voice_group_calls');
-        const knownRoomParticipants = new Map<string, Set<string>>();
-        let isInitialVoice = true;
-
-        onSnapshot(voice_group_callsRef, (snapshot: any) => {
-            const isInitial = isInitialVoice;
-            isInitialVoice = false;
-            snapshot.docChanges().forEach((change: any) => {
-                const roomId = change.doc.id;
-                const data = change.doc.data() || {};
-                const participants: any[] = data.participants || [];
-                const isActive = data.active !== false && participants.length > 0;
-
-                if (!isActive) {
-                    knownRoomParticipants.delete(roomId);
-                    return;
-                }
-
-                if (change.type === 'added' || change.type === 'modified') {
-                    const prevSet = knownRoomParticipants.get(roomId);
-                    const currentIds = new Set(participants.map((p: any) => p.id));
-
-                    // Emit event ONLY if the room just became active OR a genuinely NEW participant joined
-                    let newParticipant = null;
-                    if (!prevSet) {
-                        // Room was not previously active in local memory
-                        newParticipant = participants[participants.length - 1];
-                    } else {
-                        // Check if there is any participant ID in current snapshot not in prevSet
-                        newParticipant = participants.find((p: any) => !prevSet.has(p.id));
-                    }
-
-                    knownRoomParticipants.set(roomId, currentIds);
-
-                    if (!isInitial && newParticipant) {
-                        eventEmitter.emit('realtime-incoming-call', {
-                            roomId,
-                            courseId: data.courseId || roomId,
-                            participant: newParticipant,
-                            participants,
-                            participantsCount: participants.length,
-                            timestamp: new Date().toISOString()
-                        });
-                    }
-                } else if (change.type === 'removed') {
-                    knownRoomParticipants.delete(roomId);
-                }
-            });
-        }, (err: any) => handleSyncError('Firestore voice rooms sync:', err));
-        }
+        // 4.5. Voice / Video Rooms real-time sync is handled with granular authorization in RealtimeAlertsBanner
 
         // 4.6. Direct Conversations Metadata & Unread Badges ("Globos") Sync
         const conversationsRef = collection(db, 'firestore_conversations');

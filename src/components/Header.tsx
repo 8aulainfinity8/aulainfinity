@@ -41,7 +41,7 @@ export const Header: React.FC<HeaderProps> = ({ toggleSidebar, openSidebar, side
 
     const { theme } = useContext(ThemeContext);
     const { t } = useI18n();
-    const isFetching = useIsFetching();
+    const isFetching = useIsFetching({ queryKey: ['userProfile'] });
     const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [submittedQuery, setSubmittedQuery] = useState('');

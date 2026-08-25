@@ -206,6 +206,10 @@ export interface StudentChatPageProps {
 }
 
 export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) => {
+    useEffect(() => {
+        console.log(`[F110.30] [STUDENT_CHAT_MOUNT] | timestamp: ${performance.now()}`);
+    }, []);
+
     const { t } = useI18n();
     const { user } = useContext(AuthContext);
     const { addToast } = useContext(NotificationContext);
@@ -280,7 +284,8 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
     useEffect(() => {
         let applied = false;
         if (location.state?.activeConvoId) {
-            setActiveConvoId(location.state.activeConvoId);
+            console.log(`[F110.30] [STUDENT_CHAT_CLICK] | timestamp: ${performance.now()}`);
+                                                setActiveConvoId(location.state.activeConvoId);
             applied = true;
         }
         if (location.state?.activeChatType) {
@@ -364,7 +369,14 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
         enabled: !!studentId,
     });
 
+    console.log(`[F110.30] [USECHAT_CALL] | timestamp: ${performance.now()} | activeConvoId: ${activeConvoId}`);
     const { messages: unifiedMessages, loading: loadingUnifiedMessages, sendMessage, markAsRead } = useChat(activeConvoId, studentId);
+
+    useEffect(() => {
+        if (!loadingUnifiedMessages && activeConvoId) {
+            console.log(`[F110.30] [CHAT_READY] | timestamp: ${performance.now()} | activeConvoId: ${activeConvoId}`);
+        }
+    }, [loadingUnifiedMessages, activeConvoId]);
 
     // Replace old message arrays with unified messages if conversation is active
     const messages = activeChatType === 'private' ? unifiedMessages : [];
@@ -377,7 +389,7 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
         queryKey: ['peer-conversations', studentId],
         queryFn: () => api.fetchPeerConversations(studentId),
         enabled: !!studentId,
-        refetchInterval: 4000, // Poll every 4 seconds for fresh last messages
+        staleTime: 30000,
     });
 
     // Fetch course group conversations (channels the student is enrolled in)
@@ -385,7 +397,7 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
         queryKey: ['group-conversations', studentId],
         queryFn: () => api.fetchCourseGroupConversations(studentId),
         enabled: !!studentId,
-        refetchInterval: 4000,
+        staleTime: 30000,
     });
 
     // Fetch classmates of same academic level
@@ -480,7 +492,8 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
 
             // Automatically open this new chat
             const derivedConvoId = `peer_${[studentId, newFriend.id].sort().join('_')}`;
-            setActiveConvoId(derivedConvoId); setShowVoiceCall(false); setShowWhiteboard(false);
+            console.log(`[F110.30] [STUDENT_CHAT_CLICK] | timestamp: ${performance.now()}`);
+                                                setActiveConvoId(derivedConvoId); setShowVoiceCall(false); setShowWhiteboard(false);
             setActiveChatType('private');
             setActiveTab('private');
         },
@@ -948,7 +961,8 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
                                                             type="button"
                                                             onClick={() => {
                                                                 const derivedConvoId = `peer_${[studentId, stu.id].sort().join('_')}`;
-                                                                setActiveConvoId(derivedConvoId); setShowVoiceCall(false); setShowWhiteboard(false);
+                                                                console.log(`[F110.30] [STUDENT_CHAT_CLICK] | timestamp: ${performance.now()}`);
+                                                setActiveConvoId(derivedConvoId); setShowVoiceCall(false); setShowWhiteboard(false);
                                                                 setActiveChatType('private');
                                                                 setActiveTab('private');
                                                                 setContactInput('');
@@ -1018,7 +1032,8 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
                                                                 type="button"
                                                                 onClick={() => {
                                                                     const derivedConvoId = `peer_${[studentId, classmate.id].sort().join('_')}`;
-                                                                    setActiveConvoId(derivedConvoId); setShowVoiceCall(false); setShowWhiteboard(false);
+                                                                    console.log(`[F110.30] [STUDENT_CHAT_CLICK] | timestamp: ${performance.now()}`);
+                                                setActiveConvoId(derivedConvoId); setShowVoiceCall(false); setShowWhiteboard(false);
                                                                     setActiveChatType('private');
                                                                     setActiveTab('private');
                                                                     setIsAddFriendOpen(false);
@@ -1076,6 +1091,7 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
                                             tabIndex={0}
                                             aria-label={`Conversación con ${convo.friendName}`}
                                             onClick={() => {
+                                                console.log(`[F110.30] [STUDENT_CHAT_CLICK] | timestamp: ${performance.now()}`);
                                                 setActiveConvoId(convo.id); setShowVoiceCall(false); setShowWhiteboard(false);
                                                 setActiveChatType('private');
                                                 if (studentId) {
@@ -1086,7 +1102,8 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
                                             onKeyDown={(e) => {
                                                 if (e.key === 'Enter' || e.key === ' ') {
                                                     e.preventDefault();
-                                                    setActiveConvoId(convo.id); setShowVoiceCall(false); setShowWhiteboard(false);
+                                                    console.log(`[F110.30] [STUDENT_CHAT_CLICK] | timestamp: ${performance.now()}`);
+                                                setActiveConvoId(convo.id); setShowVoiceCall(false); setShowWhiteboard(false);
                                                     setActiveChatType('private');
                                                     if (studentId) {
                                                         api.markPeerConversationAsRead(convo.id, studentId);
@@ -1176,13 +1193,15 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
                                             tabIndex={0}
                                             aria-label={`Grupo de ${gconvo.name}`}
                                             onClick={() => {
+                                                console.log(`[F110.30] [STUDENT_CHAT_CLICK] | timestamp: ${performance.now()}`);
                                                 setActiveConvoId(gconvo.id); setShowVoiceCall(false); setShowWhiteboard(false);
                                                 setActiveChatType('group');
                                             }}
                                             onKeyDown={(e) => {
                                                 if (e.key === 'Enter' || e.key === ' ') {
                                                     e.preventDefault();
-                                                    setActiveConvoId(gconvo.id); setShowVoiceCall(false); setShowWhiteboard(false);
+                                                    console.log(`[F110.30] [STUDENT_CHAT_CLICK] | timestamp: ${performance.now()}`);
+                                                setActiveConvoId(gconvo.id); setShowVoiceCall(false); setShowWhiteboard(false);
                                                     setActiveChatType('group');
                                                 }
                                             }}
@@ -1236,7 +1255,8 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
                                 <div className="flex items-center gap-3 min-w-0">
                                     {/* Mobile Back Button */}
                                     <button
-                                        onClick={() => { setActiveConvoId(null); setShowVoiceCall(false); setShowWhiteboard(false); }}
+                                        onClick={() => { console.log(`[F110.30] [STUDENT_CHAT_CLICK] | timestamp: ${performance.now()}`);
+                                                setActiveConvoId(null); setShowVoiceCall(false); setShowWhiteboard(false); }}
                                         className="p-1 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg md:hidden flex-shrink-0"
                                         aria-label="Volver a chats"
                                     >
@@ -1632,7 +1652,8 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
                     </p>
                     <button
                         onClick={() => {
-                            setActiveConvoId(globalToastNotice.convoId);
+                            console.log(`[F110.30] [STUDENT_CHAT_CLICK] | timestamp: ${performance.now()}`);
+                                                setActiveConvoId(globalToastNotice.convoId);
                             setShowWhiteboard(true);
                             setGlobalToastNotice(null);
                         }}

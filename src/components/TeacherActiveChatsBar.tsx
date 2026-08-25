@@ -23,8 +23,8 @@ export const TeacherActiveChatsBar: React.FC = () => {
     const { data: conversations } = useQuery({
         queryKey: ['conversations'],
         queryFn: api.fetchConversations,
-        enabled: user?.role === 'teacher',
-        refetchInterval: 5000
+        enabled: false, // Componente desactivado (retorna null)
+        staleTime: 30000
     });
 
     useEffect(() => {

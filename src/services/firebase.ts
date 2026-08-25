@@ -58,10 +58,21 @@ apps.forEach((a, i) => {
   console.log(`[AUTH DEBUG] App ${i} name: ${a.name}, projectId: ${a.options.projectId}`);
 });
 
-// Inicializa Firestore
+console.log('[FB_TRANSPORT_CONFIG]', {
+  experimentalAutoDetectLongPolling: true,
+  forceLongPolling: false,
+  transport: 'experimentalAutoDetectLongPolling',
+  timestamp: Date.now()
+});
+
+// Inicializa Firestore con auto-detección de Long Polling para proxies y entornos sandbox
+const firestoreSettings = {
+  experimentalAutoDetectLongPolling: true,
+};
+
 export const db = databaseId 
-  ? initializeFirestore(app, { experimentalAutoDetectLongPolling: true }, databaseId)
-  : initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+  ? initializeFirestore(app, firestoreSettings, databaseId)
+  : initializeFirestore(app, firestoreSettings);
 
 export const auth = getAuth(app);
 export const functions = getFunctions(app, 'europe-west1');
@@ -101,12 +112,18 @@ logAdminEvent('info', 'Inicializando Firebase App', {
   hasApiKey: Boolean(firebaseConfig.apiKey)
 });
 
+import { getF11045Meta } from '../utils/f11045';
+
 // Escuchadores de estado de red y autenticación para diagnóstico Admin
 if (typeof window !== 'undefined') {
   window.addEventListener('online', () => {
+    console.log(`[F110.45] FIRESTORE_ONLINE | ${getF11045Meta()}`);
+    console.log(`[F110.30] [CHAT_SYNC_TRACE] [TRANSPORT_RECONNECT] | timestamp: ${performance.now()} | status: online`);
     logAdminEvent('info', '🌐 Red del navegador restablecida (Online)');
   });
   window.addEventListener('offline', () => {
+    console.log(`[F110.45] FIRESTORE_OFFLINE | ${getF11045Meta()}`);
+    console.log(`[F110.30] [CHAT_SYNC_TRACE] [TRANSPORT_OFFLINE] | timestamp: ${performance.now()} | status: offline`);
     logAdminEvent('warn', '⚠️ Red del navegador perdida (Offline)');
   });
 }

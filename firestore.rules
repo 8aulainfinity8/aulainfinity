@@ -323,7 +323,6 @@ service cloud.firestore {
       // Creación: exige creador verificado, chatId canónico y pertenencia a participants
       allow create: if isVerifiedUser() && (
         isAdmin() || (
-          (request.resource.data.createdBy is string && request.resource.data.createdBy == request.auth.uid) &&
           (
             isDirectChatIdForUser(chatId) ||
             isPeerChatIdForUser(chatId) ||

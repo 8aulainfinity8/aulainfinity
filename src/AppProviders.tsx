@@ -28,6 +28,19 @@ const queryClient = new QueryClient({
     },
 });
 
+queryClient.getQueryCache().subscribe((event) => {
+    if (event.type === 'added' || event.type === 'updated') {
+        const query = event.query;
+        if (query.state.status === 'pending' && query.state.fetchStatus === 'fetching') {
+            console.log(`[F110.30] [REACT_QUERY_START] | timestamp: ${performance.now()} | queryKey: ${query.queryHash}`);
+        } else if (query.state.status === 'success' || query.state.status === 'error') {
+            if (query.state.fetchStatus === 'idle') {
+                console.log(`[F110.30] [REACT_QUERY_END] | timestamp: ${performance.now()} | queryKey: ${query.queryHash} | status: ${query.state.status}`);
+            }
+        }
+    }
+});
+
 /**
  * Agrupa providers por dominio jerárquico
  * - Tier 1: Infra (Theme, I18n, Query)
@@ -87,6 +100,7 @@ export const AppProviders: React.FC<{ children: ReactNode }> = ({ children }) =>
     useEffect(() => {
         // Inicializar sincronizadores globales de Firestore
         initAppConfigSync();
+        console.log(`[F110.30] [FSYNC_START] | timestamp: ${performance.now()}`);
         initFirestoreSync();
 
         // Limpiar la caché de React Query al cerrar sesión para evitar fuga de datos

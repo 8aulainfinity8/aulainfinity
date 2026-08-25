@@ -269,7 +269,7 @@ export const requireRole = (allowedRoles: string[]) => {
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  const PORT = 3000;
 
   app.set("trust proxy", 1);
   app.use(express.json({ limit: "1mb" }));
@@ -1115,8 +1115,11 @@ async function startServer() {
   // Serve public directory static assets explicitly
   app.use(express.static(path.join(process.cwd(), "public")));
 
-  // Vite integration
-  if (process.env.NODE_ENV !== "production") {
+  // Vite integration / Static distribution serving
+  const isProduction = process.env.NODE_ENV === "production";
+  console.log(`[SERVER_RUNTIME] NODE_ENV=${process.env.NODE_ENV || "development"} | VITE_DEV_MIDDLEWARE=${!isProduction} | STATIC_DIST=${isProduction}`);
+
+  if (!isProduction) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1125,8 +1128,31 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
+    
+    // Serve assets with immutable long-term caching
+    app.use("/assets", express.static(path.join(distPath, "assets"), {
+      maxAge: "1y",
+      immutable: true,
+      etag: true,
+      lastModified: true
+    }));
+
+    // Serve other static files with standard caching, but index.html without cache
+    app.use(express.static(distPath, {
+      maxAge: "1d",
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith("index.html")) {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
+        }
+      }
+    }));
+
     app.get("*all", (req, res) => {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

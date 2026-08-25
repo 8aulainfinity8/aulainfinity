@@ -79,17 +79,26 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
     enabled: !!user,
   });
 
+  const conversationsQueryResult = useQuery<Conversation[]>({
+    queryKey: ['conversations'],
+    queryFn: api.fetchConversations,
+    enabled: user?.role === 'admin' || user?.role === 'teacher',
+    staleTime: 30000,
+  });
+
   const {
     data: conversations,
     isLoading: isConversationsLoading,
     isError: isConversationsError,
-    refetch: refetchConversations
-  } = useQuery<Conversation[]>({
-    queryKey: ['conversations'],
-    queryFn: api.fetchConversations,
-    enabled: user?.role === 'admin' || user?.role === 'teacher',
-    refetchInterval: 3000,
-  });
+    refetch: refetchConversations,
+    status: conversationsQueryStatus,
+    isPending: isConversationsPending,
+    isFetching: isConversationsFetching
+  } = conversationsQueryResult;
+
+  useEffect(() => {
+    console.log(`[F110.35] QUERY_CONVERSATIONS_DIAGNOSTICS | timestamp: ${performance.now()} | status: ${conversationsQueryStatus} | isPending: ${isConversationsPending} | isFetching: ${isConversationsFetching} | isLoading: ${isConversationsLoading} | data length: ${conversations?.length ?? 0}`);
+  }, [conversationsQueryStatus, isConversationsPending, isConversationsFetching, isConversationsLoading, conversations]);
 
   const { 
     data: groupConversations, 
@@ -98,7 +107,7 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
     queryKey: ['group-conversations', user?.id],
     queryFn: () => api.fetchCourseGroupConversations(user!.id),
     enabled: !!user && (user.role === 'admin' || user.role === 'teacher'),
-    refetchInterval: 5000,
+    staleTime: 30000,
   });
 
   const {
@@ -664,6 +673,8 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
       conversations,
       groupConversations,
       isConversationsLoading,
+      isConversationsPending,
+      isConversationsFetching,
       isConversationsError,
       refetchConversations,
       acknowledgeNewUsers, 

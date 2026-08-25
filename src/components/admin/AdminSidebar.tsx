@@ -45,7 +45,12 @@ const NavItem: React.FC<{
     <NavLink
         to={to}
         end
-        onClick={onItemClick}
+        onClick={() => {
+            if (to === ROUTES.ADMIN_CHAT) {
+                console.log(`[F110.30] [ADMIN_CHAT_ROUTE_START] | timestamp: ${performance.now()}`);
+            }
+            onItemClick();
+        }}
         aria-label={label}
         className={({ isActive }) => {
             const active = customActive !== undefined ? customActive : isActive;

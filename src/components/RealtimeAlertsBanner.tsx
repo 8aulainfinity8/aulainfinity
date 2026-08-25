@@ -5,7 +5,9 @@ import { eventEmitter } from '../services/eventService';
 import { CloseIcon } from './icons';
 import { collection, onSnapshot, doc } from 'firebase/firestore';
 import { db, auth } from '../services/firebase';
+import { listenerTracker } from '../services/listenerTracker';
 import { useAuthorization } from '../hooks/useAuthorization';
+import { getTeacherAssignedLevels } from '../utils/teacherPermissions';
 import * as dbMock from '../services/mockDatabase';
 
 interface RealtimeAlert {
@@ -51,6 +53,8 @@ export const RealtimeAlertsBanner: React.FC = () => {
         }
     });
     const [hasFirebaseClaims, setHasFirebaseClaims] = useState<boolean | null>(null);
+    const [isAdminClaim, setIsAdminClaim] = useState<boolean>(false);
+    const [isApprovedTeacherClaim, setIsApprovedTeacherClaim] = useState<boolean>(false);
 
     const dismissCall = useCallback((roomId: string) => {
         setDismissedCallIds(prev => {
@@ -69,19 +73,30 @@ export const RealtimeAlertsBanner: React.FC = () => {
             try {
                 const currentUser = auth.currentUser;
                 if (!currentUser) {
-                    if (isMounted) setHasFirebaseClaims(false);
+                    if (isMounted) {
+                        setIsAdminClaim(false);
+                        setIsApprovedTeacherClaim(false);
+                        setHasFirebaseClaims(false);
+                    }
                     return;
                 }
                 const tokenResult = await currentUser.getIdTokenResult();
                 const claims = tokenResult.claims;
                 const actualIsAdmin = claims.role === 'admin';
-                const actualIsApproved = (actualIsAdmin || (claims.role === 'teacher' && claims.isApprovedForTutoring === true)) && currentUser.emailVerified === true;
+                const actualIsApprovedTeacher = claims.role === 'teacher' && claims.isApprovedForTutoring === true && currentUser.emailVerified === true;
+                const actualIsApproved = (actualIsAdmin || actualIsApprovedTeacher) && currentUser.emailVerified === true;
                 if (isMounted) {
+                    setIsAdminClaim(actualIsAdmin);
+                    setIsApprovedTeacherClaim(actualIsApprovedTeacher);
                     setHasFirebaseClaims(actualIsApproved);
                 }
             } catch (e) {
                 console.warn('[RealtimeAlertsBanner] Failed to verify custom claims:', e);
-                if (isMounted) setHasFirebaseClaims(false);
+                if (isMounted) {
+                    setIsAdminClaim(false);
+                    setIsApprovedTeacherClaim(false);
+                    setHasFirebaseClaims(false);
+                }
             }
         };
 
@@ -99,6 +114,14 @@ export const RealtimeAlertsBanner: React.FC = () => {
     const processedIdsRef = useRef<Set<string>>(new Set());
     const initTimeRef = useRef<number>(Date.now());
     const timerRef = useRef<NodeJS.Timeout | null>(null);
+    const knownRoomParticipantsRef = useRef<Map<string, Set<string>>>(new Map());
+
+    const myUserIds = [
+        user?.id,
+        (user as any)?.firebaseUid,
+        (user as any)?.uid,
+        user?.email
+    ].filter(Boolean) as string[];
 
     // Helper to check if a room or conversation belongs to current user
     const isRoomForUser = useCallback((roomId?: string) => {
@@ -155,16 +178,70 @@ export const RealtimeAlertsBanner: React.FC = () => {
         }
     }, []);
 
-    // Escuchar salas de voz activas en tiempo real desde Firebase Firestore
+    const triggerIncomingCallToast = useCallback((data: {
+        roomId: string;
+        courseId?: string;
+        participant: { id: string; name: string; role?: string };
+        participants: any[];
+        timestamp?: string;
+    }) => {
+        if (!data.participant) return;
+
+        // Reject incoming call toasts for old timestamps (older than 30s)
+        const callTime = data.timestamp ? new Date(data.timestamp).getTime() : Date.now();
+        if (Date.now() - callTime > 30000) return;
+
+        // Do not notify if the current user is the one who joined/triggered the call
+        if (myUserIds.includes(data.participant.id)) return;
+
+        const callRoomId = data.courseId || data.roomId;
+        if (!isRoomForUser(callRoomId)) return;
+
+        // Check if current user is ALREADY inside this voice room
+        const eventParticipants = data.participants || [];
+        if (eventParticipants.some((p: any) => myUserIds.includes(p.id))) {
+            return;
+        }
+
+        const callId = `call_${data.roomId}_${data.participant.id}_${Math.floor(Date.now() / 120000)}`;
+        if (processedIdsRef.current.has(callId)) return;
+        processedIdsRef.current.add(callId);
+
+        playNotificationChime();
+
+        const newAlert: RealtimeAlert = {
+            id: callId,
+            type: 'call',
+            title: `📞 Llamada de voz iniciada por ${data.participant.name || 'un usuario'}`,
+            body: `Sala activa de voz en directo. ¡Únete directamente con un clic!`,
+            courseId: callRoomId,
+            conversationId: callRoomId,
+            timestamp: Date.now()
+        };
+
+        setCurrentAlert(newAlert);
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => setCurrentAlert(null), 10000);
+    }, [myUserIds, isRoomForUser, playNotificationChime]);
+
+    // Escuchar salas de voz activas en tiempo real desde Firebase Firestore con autorización granular
     useEffect(() => {
         if (!user) return;
 
         let unsubs: (() => void)[] = [];
+        knownRoomParticipantsRef.current.clear();
 
-        const handleVoiceSnapshot = (activeRooms: ActiveVoiceRoom[], docSnap: any) => {
+        const handleVoiceDocSnapshot = (docSnap: any, isInitialSnapshot: boolean): ActiveVoiceRoom | null => {
+            if (!docSnap.exists()) {
+                knownRoomParticipantsRef.current.delete(docSnap.id);
+                return null;
+            }
             const data = docSnap.data() as any;
-            if (!data) return;
-            const participants = data.participants || [];
+            if (!data) {
+                knownRoomParticipantsRef.current.delete(docSnap.id);
+                return null;
+            }
+            const participants: any[] = data.participants || [];
             const now = Date.now();
             
             let isStale = false;
@@ -174,24 +251,59 @@ export const RealtimeAlertsBanner: React.FC = () => {
                     isStale = true;
                 }
             }
-            if (data.active === true && Array.isArray(participants) && participants.length > 0 && !isStale) {
-                activeRooms.push({
-                    id: docSnap.id,
-                    courseId: data.courseId || docSnap.id,
-                    active: true,
+            const isActive = data.active === true && Array.isArray(participants) && participants.length > 0 && !isStale;
+
+            const roomId = docSnap.id;
+            if (!isActive) {
+                knownRoomParticipantsRef.current.delete(roomId);
+                return null;
+            }
+
+            const prevSet = knownRoomParticipantsRef.current.get(roomId);
+            const currentIds = new Set<string>(participants.map((p: any) => p.id));
+
+            let newParticipant: any = null;
+            if (!prevSet) {
+                newParticipant = participants[participants.length - 1];
+            } else {
+                newParticipant = participants.find((p: any) => !prevSet.has(p.id));
+            }
+
+            knownRoomParticipantsRef.current.set(roomId, currentIds);
+
+            if (!isInitialSnapshot && newParticipant) {
+                triggerIncomingCallToast({
+                    roomId,
+                    courseId: data.courseId || roomId,
+                    participant: newParticipant,
                     participants,
-                    updatedAt: data.updatedAt
+                    timestamp: new Date().toISOString()
                 });
             }
+
+            return {
+                id: docSnap.id,
+                courseId: data.courseId || docSnap.id,
+                active: true,
+                participants,
+                updatedAt: data.updatedAt
+            };
         };
 
-        if (hasFirebaseClaims) {
-            // Admins and approved teachers can listen to the entire collection
+        const actualIsAdmin = isAdminClaim || (user.role === 'admin' && hasFirebaseClaims === true);
+        const actualIsApprovedTeacher = (isApprovedTeacherClaim || (user.role === 'teacher' && isApprovedTeacher)) && user.role === 'teacher';
+
+        if (actualIsAdmin) {
+            // Admin: supervisión global legítima de todas las salas de voz
             const voice_group_callsRef = collection(db, 'voice_group_calls');
+            let isInitialCollection = true;
             const unsub = onSnapshot(voice_group_callsRef, (snapshot) => {
+                const isInitial = isInitialCollection;
+                isInitialCollection = false;
                 const activeRooms: ActiveVoiceRoom[] = [];
                 snapshot.forEach((docSnap) => {
-                    handleVoiceSnapshot(activeRooms, docSnap);
+                    const room = handleVoiceDocSnapshot(docSnap, isInitial);
+                    if (room) activeRooms.push(room);
                 });
                 setActiveVoiceRooms(activeRooms);
                 
@@ -202,51 +314,87 @@ export const RealtimeAlertsBanner: React.FC = () => {
                     }
                     return prev;
                 });
-            }, (err) => console.warn('Firestore active voice rooms listener:', err.message));
+            }, (err) => console.warn('Firestore active voice rooms listener (admin):', err.message));
             unsubs.push(unsub);
-        } else if (user.role === 'student' && (user as any).enrolledCourseIds?.length > 0) {
-            // Students listen to their specific enrolled courses
-            const activeRoomsMap = new Map<string, ActiveVoiceRoom>();
-            (user as any).enrolledCourseIds.forEach((courseId: string) => {
-                const docRef = doc(db, 'voice_group_calls', courseId);
-                const unsub = onSnapshot(docRef, (docSnap) => {
-                    if (docSnap.exists()) {
-                        const tempRooms: ActiveVoiceRoom[] = [];
-                        handleVoiceSnapshot(tempRooms, docSnap);
-                        if (tempRooms.length > 0) {
-                            activeRoomsMap.set(docSnap.id, tempRooms[0]);
+        } else if (actualIsApprovedTeacher) {
+            // Approved Teacher: listeners individuales por cada curso asignado
+            const taughtCourseIds = getTeacherAssignedLevels(user as any);
+            if (taughtCourseIds.length > 0) {
+                const activeRoomsMap = new Map<string, ActiveVoiceRoom>();
+                taughtCourseIds.forEach((courseId: string) => {
+                    const docRef = doc(db, 'voice_group_calls', courseId);
+                    let isInitialDoc = true;
+                    const unsub = onSnapshot(docRef, (docSnap) => {
+                        const isInitial = isInitialDoc;
+                        isInitialDoc = false;
+                        const room = handleVoiceDocSnapshot(docSnap, isInitial);
+                        if (room) {
+                            activeRoomsMap.set(docSnap.id, room);
                         } else {
                             activeRoomsMap.delete(docSnap.id);
                         }
-                    } else {
-                        activeRoomsMap.delete(docSnap.id);
-                    }
-                    
-                    const activeRooms = Array.from(activeRoomsMap.values());
-                    setActiveVoiceRooms(activeRooms);
-                    
-                    setCurrentAlert(prev => {
-                        if (prev?.type === 'call') {
-                            const isStillActive = activeRooms.some(r => (r.courseId || r.id) === prev.courseId);
-                            if (!isStillActive) return null;
-                        }
-                        return prev;
+                        
+                        const activeRooms = Array.from(activeRoomsMap.values());
+                        setActiveVoiceRooms(activeRooms);
+                        
+                        setCurrentAlert(prev => {
+                            if (prev?.type === 'call') {
+                                const isStillActive = activeRooms.some(r => (r.courseId || r.id) === prev.courseId);
+                                if (!isStillActive) return null;
+                            }
+                            return prev;
+                        });
+                    }, (_err) => {
+                        // Ignorar errores de permisos para documentos no creados o inaccesibles
                     });
-                }, (err) => {
-                    // Ignore missing permissions for specific docs
+                    unsubs.push(unsub);
                 });
-                unsubs.push(unsub);
-            });
+            }
+        } else if (user.role === 'student') {
+            // Students: listeners individuales por cada curso en el que está matriculado
+            const enrolledCourseIds = Array.isArray((user as any).enrolledCourseIds) ? (user as any).enrolledCourseIds : [];
+            if (enrolledCourseIds.length > 0) {
+                const activeRoomsMap = new Map<string, ActiveVoiceRoom>();
+                enrolledCourseIds.forEach((courseId: string) => {
+                    const docRef = doc(db, 'voice_group_calls', courseId);
+                    let isInitialDoc = true;
+                    const unsub = onSnapshot(docRef, (docSnap) => {
+                        const isInitial = isInitialDoc;
+                        isInitialDoc = false;
+                        const room = handleVoiceDocSnapshot(docSnap, isInitial);
+                        if (room) {
+                            activeRoomsMap.set(docSnap.id, room);
+                        } else {
+                            activeRoomsMap.delete(docSnap.id);
+                        }
+                        
+                        const activeRooms = Array.from(activeRoomsMap.values());
+                        setActiveVoiceRooms(activeRooms);
+                        
+                        setCurrentAlert(prev => {
+                            if (prev?.type === 'call') {
+                                const isStillActive = activeRooms.some(r => (r.courseId || r.id) === prev.courseId);
+                                if (!isStillActive) return null;
+                            }
+                            return prev;
+                        });
+                    }, (_err) => {
+                        // Ignorar errores de permisos para documentos individuales
+                    });
+                    unsubs.push(unsub);
+                });
+            }
         }
+        // Regular Teacher (user.role === 'teacher' && !isApprovedTeacher): 0 listeners globales creados
 
         return () => {
             unsubs.forEach(u => u());
         };
-    }, [hasFirebaseClaims, user]);
+    }, [isAdminClaim, isApprovedTeacherClaim, hasFirebaseClaims, user, isApprovedTeacher, triggerIncomingCallToast]);
 
     // Escuchar pizarras digitales activas en tiempo real desde Firebase Firestore
     useEffect(() => {
-        if (!hasFirebaseClaims) return;
+        if (!hasFirebaseClaims || !isAdminClaim) return;
 
         const boardMetaRef = collection(db, 'whiteboards');
         let initialLoadDone = false;
@@ -289,7 +437,7 @@ export const RealtimeAlertsBanner: React.FC = () => {
         }, (err) => console.warn('Firestore whiteboardMeta listener:', err.message));
 
         return () => unsub();
-    }, [hasFirebaseClaims, user, isRoomForUser, playNotificationChime]);
+    }, [hasFirebaseClaims, isAdminClaim, user, isRoomForUser, playNotificationChime]);
 
     // Función para cerrar la alerta toast actual
     const handleClose = useCallback(() => {
@@ -470,56 +618,10 @@ export const RealtimeAlertsBanner: React.FC = () => {
             timerRef.current = setTimeout(() => setCurrentAlert(null), 8000);
         };
 
-        const handleIncomingCall = (data: any) => {
-            if (!data.participant) return;
-
-            // Reject incoming call toasts for old timestamps (older than 30s)
-            const callTime = data.timestamp ? new Date(data.timestamp).getTime() : Date.now();
-            if (Date.now() - callTime > 30000) return;
-
-            // Do not notify if the current user is the one who joined/triggered the call
-            if (myUserIds.includes(data.participant.id)) return;
-
-            const callRoomId = data.courseId || data.roomId;
-            if (!isRoomForUser(callRoomId)) return;
-
-            // Check if current user is ALREADY inside this voice room
-            const existingRoom = activeVoiceRooms.find(r => r.id === callRoomId || r.courseId === callRoomId);
-            if (existingRoom && existingRoom.participants.some(p => myUserIds.includes(p.id))) {
-                return; // User is already connected to the voice call
-            }
-
-            // Also check the raw payload participants list to prevent any state race conditions
-            const eventParticipants = data.participants || [];
-            if (eventParticipants.some((p: any) => myUserIds.includes(p.id))) {
-                return; // User is already in the participants list of the event
-            }
-
-            const callId = `call_${data.roomId}_${data.participant.id}_${Math.floor(Date.now() / 120000)}`;
-            if (processedIdsRef.current.has(callId)) return;
-            processedIdsRef.current.add(callId);
-
-            const newAlert: RealtimeAlert = {
-                id: callId,
-                type: 'call',
-                title: `📞 Llamada de voz iniciada por ${data.participant.name}`,
-                body: `Sala activa de voz en directo. ¡Únete directamente con un clic!`,
-                courseId: callRoomId,
-                conversationId: callRoomId,
-                timestamp: Date.now()
-            };
-
-            setCurrentAlert(newAlert);
-            if (timerRef.current) clearTimeout(timerRef.current);
-            timerRef.current = setTimeout(() => setCurrentAlert(null), 10000);
-        };
-
         eventEmitter.on('realtime-incoming-message', handleIncomingMessage);
-        eventEmitter.on('realtime-incoming-call', handleIncomingCall);
 
         return () => {
             eventEmitter.off('realtime-incoming-message', handleIncomingMessage);
-            eventEmitter.off('realtime-incoming-call', handleIncomingCall);
             if (timerRef.current) clearTimeout(timerRef.current);
         };
     }, [user, isRoomForUser, activeVoiceRooms, playNotificationChime]);

@@ -12,34 +12,63 @@ import { StudentDashboard } from './components/Dashboard';
 import { AdminProtectedRoute } from './components/AdminProtectedRoute';
 import { AdminLayout } from './components/admin/AdminLayout';
 
-// --- LAZY LOADED SECONDARY & HEAVY ROUTES (Code Splitting for Optimal Performance) ---
-const CoursePage = React.lazy(() => import('./components/CoursePage').then(m => ({ default: m.CoursePage })));
-const VideoPage = React.lazy(() => import('./components/VideoPage').then(m => ({ default: m.VideoPage })));
-const TutorIAPage = React.lazy(() => import('./components/TutorIAPage').then(m => ({ default: m.TutorIAPage })));
-const TutoringPage = React.lazy(() => import('./components/TutoringPage').then(m => ({ default: m.TutoringPage })));
-const RequestPage = React.lazy(() => import('./components/RequestPage').then(m => ({ default: m.RequestPage })));
-const PaymentPage = React.lazy(() => import('./components/PaymentPage').then(m => ({ default: m.PaymentPage })));
-const AccountPage = React.lazy(() => import('./components/AccountPage').then(m => ({ default: m.AccountPage })));
-const BachilleratoPage = React.lazy(() => import('./components/BachilleratoPage').then(m => ({ default: m.BachilleratoPage })));
-const AgendaPage = React.lazy(() => import('./components/AgendaPage').then(m => ({ default: m.AgendaPage })));
-const StudentProgressPage = React.lazy(() => import('./components/StudentProgressPage').then(m => ({ default: m.StudentProgressPage })));
-const ChatPage = React.lazy(() => import('./components/ChatPage').then(m => ({ default: m.ChatPage })));
-const StudentChatPage = React.lazy(() => import('./components/StudentChatPage').then(m => ({ default: m.StudentChatPage })));
-const StudyGroupsPage = React.lazy(() => import('./components/StudyGroupsPage').then(m => ({ default: m.StudyGroupsPage })));
-const TeacherStudentsPage = React.lazy(() => import('./components/TeacherStudentsPage').then(m => ({ default: m.TeacherStudentsPage })));
+import { getF11045Meta } from './utils/f11045';
+
+// --- LAZY LOADED SECONDARY & HEAVY ROUTES (Code Splitting with Stale Chunk Recovery) ---
+function lazyWithRetry<T extends { default: React.ComponentType<any> }>(
+  importFn: () => Promise<T>
+): React.LazyExoticComponent<React.ComponentType<any>> {
+  return React.lazy(async () => {
+    try {
+      return await importFn();
+    } catch (error: any) {
+      const isChunkLoadError = 
+        error?.message?.includes('Failed to fetch dynamically imported module') ||
+        error?.message?.includes('Importing a module script failed') ||
+        error?.message?.includes('dynamically imported module') ||
+        error?.name === 'ChunkLoadError';
+
+      if (isChunkLoadError) {
+        console.warn(`[F110.45] LAZY_RETRY_START | ${getF11045Meta()} | error: ${error?.message}`);
+        if (!window.sessionStorage.getItem('chunk_reload_attempted')) {
+          console.warn(`[F110.45] LAZY_RETRY_RELOAD | ${getF11045Meta()} | Executing window.location.reload()`);
+          window.sessionStorage.setItem('chunk_reload_attempted', 'true');
+          window.location.reload();
+          return { default: (() => null) as unknown as React.ComponentType<any> };
+        }
+      }
+      throw error;
+    }
+  });
+}
+
+const CoursePage = lazyWithRetry(() => import('./components/CoursePage').then(m => ({ default: m.CoursePage })));
+const VideoPage = lazyWithRetry(() => import('./components/VideoPage').then(m => ({ default: m.VideoPage })));
+const TutorIAPage = lazyWithRetry(() => import('./components/TutorIAPage').then(m => ({ default: m.TutorIAPage })));
+const TutoringPage = lazyWithRetry(() => import('./components/TutoringPage').then(m => ({ default: m.TutoringPage })));
+const RequestPage = lazyWithRetry(() => import('./components/RequestPage').then(m => ({ default: m.RequestPage })));
+const PaymentPage = lazyWithRetry(() => import('./components/PaymentPage').then(m => ({ default: m.PaymentPage })));
+const AccountPage = lazyWithRetry(() => import('./components/AccountPage').then(m => ({ default: m.AccountPage })));
+const BachilleratoPage = lazyWithRetry(() => import('./components/BachilleratoPage').then(m => ({ default: m.BachilleratoPage })));
+const AgendaPage = lazyWithRetry(() => import('./components/AgendaPage').then(m => ({ default: m.AgendaPage })));
+const StudentProgressPage = lazyWithRetry(() => import('./components/StudentProgressPage').then(m => ({ default: m.StudentProgressPage })));
+const ChatPage = lazyWithRetry(() => import('./components/ChatPage').then(m => ({ default: m.ChatPage })));
+const StudentChatPage = lazyWithRetry(() => import('./components/StudentChatPage').then(m => ({ default: m.StudentChatPage })));
+const StudyGroupsPage = lazyWithRetry(() => import('./components/StudyGroupsPage').then(m => ({ default: m.StudyGroupsPage })));
+const TeacherStudentsPage = lazyWithRetry(() => import('./components/TeacherStudentsPage').then(m => ({ default: m.TeacherStudentsPage })));
 
 // Admin Lazy Pages
-const AdminDashboardPage = React.lazy(() => import('./components/admin/AdminDashboardPage').then(m => ({ default: m.AdminDashboardPage })));
-const AdminUsersPage = React.lazy(() => import('./components/admin/AdminUsersPage').then(m => ({ default: m.AdminUsersPage })));
-const AdminContentPage = React.lazy(() => import('./components/admin/AdminContentPage').then(m => ({ default: m.AdminContentPage })));
-const AdminProgressPage = React.lazy(() => import('./components/admin/AdminProgressPage').then(m => ({ default: m.AdminProgressPage })));
-const AdminRequestsPage = React.lazy(() => import('./components/admin/AdminRequestsPage').then(m => ({ default: m.AdminRequestsPage })));
-const AdminTutoringRequestsPage = React.lazy(() => import('./components/admin/AdminTutoringRequestsPage').then(m => ({ default: m.AdminTutoringRequestsPage })));
-const AdminCommentsPage = React.lazy(() => import('./components/admin/AdminCommentsPage').then(m => ({ default: m.AdminCommentsPage })));
-const AdminSettingsPage = React.lazy(() => import('./components/admin/AdminSettingsPage').then(m => ({ default: m.AdminSettingsPage })));
-const AdminConnectionPage = React.lazy(() => import('./components/admin/AdminConnectionPage').then(m => ({ default: m.AdminConnectionPage })));
-const AdminChatPage = React.lazy(() => import('./components/admin/AdminChatPage').then(m => ({ default: m.AdminChatPage })));
-const AdminSubscriptionManagementPage = React.lazy(() => import('./components/admin/AdminSubscriptionManagementPage').then(m => ({ default: m.AdminSubscriptionManagementPage })));
+const AdminDashboardPage = lazyWithRetry(() => import('./components/admin/AdminDashboardPage').then(m => ({ default: m.AdminDashboardPage })));
+const AdminUsersPage = lazyWithRetry(() => import('./components/admin/AdminUsersPage').then(m => ({ default: m.AdminUsersPage })));
+const AdminContentPage = lazyWithRetry(() => import('./components/admin/AdminContentPage').then(m => ({ default: m.AdminContentPage })));
+const AdminProgressPage = lazyWithRetry(() => import('./components/admin/AdminProgressPage').then(m => ({ default: m.AdminProgressPage })));
+const AdminRequestsPage = lazyWithRetry(() => import('./components/admin/AdminRequestsPage').then(m => ({ default: m.AdminRequestsPage })));
+const AdminTutoringRequestsPage = lazyWithRetry(() => import('./components/admin/AdminTutoringRequestsPage').then(m => ({ default: m.AdminTutoringRequestsPage })));
+const AdminCommentsPage = lazyWithRetry(() => import('./components/admin/AdminCommentsPage').then(m => ({ default: m.AdminCommentsPage })));
+const AdminSettingsPage = lazyWithRetry(() => import('./components/admin/AdminSettingsPage').then(m => ({ default: m.AdminSettingsPage })));
+const AdminConnectionPage = lazyWithRetry(() => import('./components/admin/AdminConnectionPage').then(m => ({ default: m.AdminConnectionPage })));
+const AdminChatPage = lazyWithRetry(() => import('./components/admin/AdminChatPage').then(m => ({ default: m.AdminChatPage })));
+const AdminSubscriptionManagementPage = lazyWithRetry(() => import('./components/admin/AdminSubscriptionManagementPage').then(m => ({ default: m.AdminSubscriptionManagementPage })));
 
 // Lightweight Fast Loading Fallback
 const PageLoadingFallback: React.FC = () => (
@@ -50,6 +79,13 @@ const PageLoadingFallback: React.FC = () => (
 );
 
 const App: React.FC = () => {
+  React.useEffect(() => {
+    console.log(`[F110.45] APP_MOUNT | ${getF11045Meta()}`);
+    return () => {
+      console.log(`[F110.45] APP_UNMOUNT | ${getF11045Meta()}`);
+    };
+  }, []);
+
   return (
     <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <ErrorBoundary>

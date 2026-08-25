@@ -300,16 +300,29 @@ const MessageBubble: React.FC<{
 // --- MAIN COMPONENT ---
 
 export const AdminChatPage: React.FC = () => {
+    useEffect(() => {
+        console.log(`[F110.30] [ADMIN_CHAT_MOUNT] | timestamp: ${performance.now()}`);
+    }, []);
+
     const { user } = useContext(AuthContext);
     const isTeacher = user?.role === 'teacher';
     const isApprovedTeacher = isTeacher ? (user as any).isApprovedForTutoring !== false : true;
     const queryClient = useQueryClient();
-    const { conversations, isConversationsLoading } = useContext(AdminNotificationContext);
+    const { conversations, isConversationsLoading, isConversationsPending, isConversationsFetching } = useContext(AdminNotificationContext);
+
+    useEffect(() => {
+        console.log(`[F110.35] ADMIN_CHAT_MOUNT | timestamp: ${performance.now()}`);
+    }, []);
 
     const location = useLocation();
     const [searchParams, setSearchParams] = useSearchParams();
     const studentQueryId = searchParams.get('studentId');
     const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+
+    const handleSelectConversation = (id: string | null) => {
+        console.log(`[F110.30] [ADMIN_CHAT_CLICK] | timestamp: ${performance.now()} | newId: ${id}`);
+        setSelectedConversationId(id);
+    };
 
     const [activeTab, setActiveTab] = useState<'group' | 'peer' | 'teacher' | 'whiteboard'>((location.state?.activeChatType as any) || 'peer');
     const [showVoiceCall, setShowVoiceCall] = useState(false);
@@ -456,7 +469,7 @@ export const AdminChatPage: React.FC = () => {
         queryKey: ['peerConversations'],
         queryFn: api.fetchAllPeerConversations,
         enabled: activeTab === 'peer',
-        refetchInterval: 5000
+        staleTime: 30000
     });
 
     // Fetch peer messages for selected peer conversation
@@ -464,7 +477,7 @@ export const AdminChatPage: React.FC = () => {
         queryKey: ['peerMessages', selectedConversationId],
         queryFn: () => api.fetchPeerMessages(selectedConversationId!),
         enabled: activeTab === 'peer' && !!selectedConversationId,
-        refetchInterval: 3000
+        staleTime: 30000
     });
 
     // Fetch teacher coordination messages
@@ -472,14 +485,14 @@ export const AdminChatPage: React.FC = () => {
         queryKey: ['teacherMessages', selectedConversationId],
         queryFn: () => api.fetchTeacherMessages(selectedConversationId || 'sala_profesores_coordinacion'),
         enabled: activeTab === 'teacher',
-        refetchInterval: 3000
+        staleTime: 30000
     });
 
     const { data: allTeacherMessages } = useQuery({
         queryKey: ['teacherMessages', 'ALL'],
         queryFn: () => api.fetchTeacherMessages('ALL'),
         enabled: activeTab === 'teacher',
-        refetchInterval: 3000
+        staleTime: 30000
     });
 
     // Real-time Firestore event listeners to update UI immediately
@@ -506,7 +519,6 @@ export const AdminChatPage: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['peerConversations'] });
         };
 
-        eventEmitter.on('message-update', handleDirectMessageUpdate);
         eventEmitter.on('direct-message-update', handleDirectMessageUpdate);
         eventEmitter.on('teacher-message-update', handleTeacherMessageUpdate);
         eventEmitter.on('teacher-message-deleted', handleTeacherMessageUpdate);
@@ -516,7 +528,6 @@ export const AdminChatPage: React.FC = () => {
         eventEmitter.on('user-update', handleUserUpdate);
 
         return () => {
-            eventEmitter.off('message-update', handleDirectMessageUpdate);
             eventEmitter.off('direct-message-update', handleDirectMessageUpdate);
             eventEmitter.off('teacher-message-update', handleTeacherMessageUpdate);
             eventEmitter.off('teacher-message-deleted', handleTeacherMessageUpdate);
@@ -826,7 +837,7 @@ export const AdminChatPage: React.FC = () => {
                     studentName: student.name,
                     studentEmail: student.email + (student.assignedTeacherName ? ` • Tutor: ${student.assignedTeacherName}` : ''),
                     lastMessageText: 'Canal directo con alumno asignado',
-                    lastMessageTimestamp: new Date().toISOString(),
+                    lastMessageTimestamp: '',
                     unreadByTeacher: false,
                     unreadByAdmin: false
                 } as unknown as Conversation;
@@ -882,14 +893,22 @@ export const AdminChatPage: React.FC = () => {
     const supportParticipants = targetStudentId ? [targetStudentId] : undefined;
     const chatParticipants = effectiveConvoId?.startsWith('support_') ? supportParticipants : directParticipants;
 
-    const { messages: unifiedMessages, loading: loadingUnifiedMessages, sendMessage, markAsRead, editMessage, deleteMessage } = useChat(
-        effectiveConvoId, 
-        user?.id || null,
-        {
+    const chatOptions = useMemo(() => {
+        const directParts = targetStudentId && targetTeacherId ? [targetStudentId, targetTeacherId] : undefined;
+        const supportParts = targetStudentId ? [targetStudentId] : undefined;
+        const parts = effectiveConvoId?.startsWith('support_') ? supportParts : directParts;
+        return {
             studentId: targetStudentId || undefined,
             teacherId: targetTeacherId || undefined,
-            participants: chatParticipants
-        }
+            participants: parts
+        };
+    }, [effectiveConvoId, targetStudentId, targetTeacherId]);
+
+    console.log(`[F110.30] [USECHAT_CALL] | timestamp: ${performance.now()} | effectiveConvoId: ${effectiveConvoId} | selectedConversationId: ${selectedConversationId}`);
+    const { messages: unifiedMessages, loading: loadingUnifiedMessages, sendMessage, markAsRead, editMessage, deleteMessage, listenerReady } = useChat(
+        effectiveConvoId, 
+        user?.id || null,
+        chatOptions
     );
 
     const activeMessages = useMemo(() => {
@@ -902,6 +921,16 @@ export const AdminChatPage: React.FC = () => {
     }, [unifiedMessages, isTeacher, user?.id]);
 
     const isChatLoading = loadingUnifiedMessages;
+
+    useEffect(() => {
+        console.log(`[F110.35] CHAT_UI_STATE | timestamp: ${performance.now()} | isConversationsLoading: ${isConversationsLoading} | isConversationsFetching: ${isConversationsFetching} | isConversationsPending: ${isConversationsPending} | selectedConversationId: ${selectedConversationId} | isChatLoading: ${isChatLoading} | listenerReady: ${listenerReady} | unifiedMessages.length: ${unifiedMessages?.length ?? 0} | activeMessages.length: ${activeMessages?.length ?? 0}`);
+    }, [isConversationsLoading, isConversationsFetching, isConversationsPending, selectedConversationId, isChatLoading, listenerReady, unifiedMessages, activeMessages]);
+
+    useEffect(() => {
+        if (!isChatLoading && listenerReady && effectiveConvoId) {
+            console.log(`[F110.30] [CHAT_READY] | timestamp: ${performance.now()} | effectiveConvoId: ${effectiveConvoId} | listenerReady: ${listenerReady}`);
+        }
+    }, [isChatLoading, listenerReady, effectiveConvoId]);
 
     // --- MUTACIONES PARA CHATS ---
     const editMessageMutation = useMutation({
@@ -1167,7 +1196,7 @@ export const AdminChatPage: React.FC = () => {
                                         <ConversationItem
                                             conversation={convo}
                                             isSelected={selectedConversationId === convo.id}
-                                            onSelect={() => setSelectedConversationId(convo.id)}
+                                            onSelect={() => handleSelectConversation(convo.id)}
                                         />
                                     </div>
                                 )
@@ -1458,10 +1487,8 @@ export const AdminChatPage: React.FC = () => {
 
                         {/* Messages Panel */}
                         <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 min-h-0">
-                            {isChatLoading ? (
-                                <div className="flex justify-center items-center h-full"><Spinner /></div>
-                            ) : (
-                                activeMessages?.map(msg => (
+                            {activeMessages && activeMessages.length > 0 ? (
+                                activeMessages.map(msg => (
                                     <MessageBubble 
                                         key={msg.id} 
                                         message={msg} 
@@ -1484,6 +1511,23 @@ export const AdminChatPage: React.FC = () => {
                                         }}
                                     />
                                 ))
+                            ) : isChatLoading ? (
+                                <div className="flex flex-col items-center justify-center h-full text-slate-400 dark:text-slate-500 p-8 text-center" data-testid="chat-loading-spinner">
+                                    <Spinner className="w-6 h-6 mb-2 text-indigo-500 animate-spin" />
+                                    <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">Sincronizando conversación...</p>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col items-center justify-center h-full text-slate-400 dark:text-slate-500 p-8 text-center" data-testid="chat-empty-state">
+                                    <div className="w-12 h-12 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700/80 shadow-sm flex items-center justify-center text-slate-400 mb-3">
+                                        <ChatBubbleLeftRightIcon className="w-6 h-6" />
+                                    </div>
+                                    <p className="font-semibold text-slate-700 dark:text-slate-300 text-sm md:text-base">
+                                        No hay mensajes todavía en esta conversación
+                                    </p>
+                                    <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400 mt-1">
+                                        Envía un mensaje abajo para iniciar la tutoría.
+                                    </p>
+                                </div>
                             )}
                             <div ref={messagesEndRef} />
                         </div>

@@ -37,7 +37,7 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
         queryKey: ['conversations'],
         queryFn: api.fetchConversations,
         enabled: !!user && user.role === 'student',
-        refetchInterval: 5000,
+        staleTime: 30000,
     });
 
     const { 
@@ -48,7 +48,7 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
         queryKey: ['peer-conversations', user?.id],
         queryFn: () => api.fetchPeerConversations(user!.id),
         enabled: !!user && user.role === 'student',
-        refetchInterval: 5000,
+        staleTime: 30000,
     });
 
     const { 
@@ -59,7 +59,7 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
         queryKey: ['group-conversations', user?.id],
         queryFn: () => api.fetchCourseGroupConversations(user!.id),
         enabled: !!user && user.role === 'student',
-        refetchInterval: 5000,
+        staleTime: 30000,
     });
 
     const { 

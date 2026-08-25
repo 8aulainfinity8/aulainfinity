@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aulainfinity-pwa-cache-v7';
+const CACHE_NAME = 'aulainfinity-pwa-cache-v8';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
