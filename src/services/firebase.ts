@@ -7,7 +7,8 @@ import {
   setDoc, 
   addDoc, 
   updateDoc, 
-  deleteDoc 
+  deleteDoc,
+  enableMultiTabIndexedDbPersistence
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getFunctions } from "firebase/functions";
@@ -111,6 +112,20 @@ logAdminEvent('info', 'Inicializando Firebase App', {
   databaseId,
   hasApiKey: Boolean(firebaseConfig.apiKey)
 });
+
+if (typeof window !== 'undefined') {
+  enableMultiTabIndexedDbPersistence(db)
+    .then(() => logAdminEvent('info', '📦 Persistencia offline multidestello habilitada en Firestore'))
+    .catch((err) => {
+      if (err.code === 'failed-precondition') {
+        logAdminEvent('warn', '⚠️ Persistencia offline de Firestore falló por precondición (multi-tab):', err);
+      } else if (err.code === 'unimplemented') {
+        logAdminEvent('warn', '⚠️ El navegador actual no soporta persistencia offline de Firestore:', err);
+      } else {
+        logAdminEvent('warn', '⚠️ Error habilitando persistencia offline:', err);
+      }
+    });
+}
 
 import { getF11045Meta } from '../utils/f11045';
 

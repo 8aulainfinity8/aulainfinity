@@ -1,6 +1,0 @@
-{
-  "name": "Aulainfinity",
-  "description": "Aulainfinity: Aprende sin límites, crece sin fronteras. An online learning platform for ESO, Bachillerato, and EBAU students, offering video tutorials in Mathematics, Physics, and Chemistry. It includes options for requesting online classes, weekly tutoring, and topic requests, with a subscription-based model.",
-  "requestFramePermissions": ["camera", "microphone"],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
