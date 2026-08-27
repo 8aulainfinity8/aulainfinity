@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { 
   doc, 
   collection, 
@@ -17,13 +18,15 @@ import { db, auth } from '../services/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { listenerTracker } from '../services/listenerTracker';
 import * as api from '../services/api';
+import * as dbMock from '../services/mockDatabase';
 import {
   inferParticipantsFromChatId,
   parseDirectChatId,
   parseSupportChatId,
   getDirectChatId,
   getDirectChatParticipants,
-  resolveUserUid
+  resolveUserUid,
+  resolveConversationMetadata
 } from '../utils/chatUtils';
 
 export {
@@ -32,7 +35,8 @@ export {
   parseSupportChatId,
   getDirectChatId,
   getDirectChatParticipants,
-  resolveUserUid
+  resolveUserUid,
+  resolveConversationMetadata
 };
 
 export interface ChatMessage {
@@ -73,6 +77,13 @@ export function useChat(
   currentUserId: string | null,
   options?: UseChatOptions
 ) {
+  let queryClient: any = null;
+  try {
+    queryClient = useQueryClient();
+  } catch {
+    // Outside QueryClientProvider (e.g. isolated unit tests)
+    queryClient = null;
+  }
   const { isFirebaseAuthReady, firebaseUser, firebaseEmailVerified, firebaseRole, firebaseUid } = useAuth();
   const currentUser = auth?.currentUser || firebaseUser;
   const resolvedUserId = (currentUser?.uid || firebaseUid) ? (currentUser?.uid || firebaseUid!) : currentUserId;
@@ -112,6 +123,10 @@ export function useChat(
     setChatMeta(null);
   }
 
+  const optStudentId = options?.studentId;
+  const optTeacherId = options?.teacherId;
+  const optParticipantsKey = options?.participants ? options.participants.join(',') : '';
+
   // Escuchar metadatos del chat y mensajes en tiempo real sincronizado con Firebase Auth
   useEffect(() => {
     if (!effectiveChatId) {
@@ -130,10 +145,9 @@ export function useChat(
     }
 
     // 2. Comprobar sesión real de Firebase Auth y verificación de email
-    const isVerified = Boolean(currentUser && (currentUser.emailVerified || emailVerified));
+    const isVerified = Boolean(currentUser && (currentUser.emailVerified || emailVerified || firebaseRole === 'admin' || firebaseRole === 'teacher'));
 
     if (!currentUser || !isVerified) {
-      setMessages([]);
       setChatMeta(null);
       setLoading(false);
       setListenerReady(false);
@@ -141,15 +155,22 @@ export function useChat(
     }
 
     setError(null);
-    setListenerReady(false);
 
     let unsubChat: (() => void) | null = null;
     let unsubMessages: (() => void) | null = null;
 
     let trackerMetaId: string | null = null;
     let trackerMsgId: string | null = null;
+    let fallbackTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
     try {
+      // Safety timeout to prevent indefinite spinners
+      fallbackTimeoutId = setTimeout(() => {
+        console.warn(`[useChat] Firestore timeout for ${effectiveChatId}, clearing loading state.`);
+        setLoading(false);
+        setListenerReady(true);
+      }, 500);
+
       // Documento de metadatos del chat
       trackerMetaId = listenerTracker.register('useChat (meta)', `chats/${effectiveChatId}`, 'doc');
       const chatRef = doc(db, 'chats', effectiveChatId);
@@ -157,15 +178,18 @@ export function useChat(
       unsubChat = onSnapshot(
         chatRef, 
         (snapshot) => {
+          if (fallbackTimeoutId) clearTimeout(fallbackTimeoutId);
           if (snapshot.exists()) {
             setChatMeta({ chatId: snapshot.id, ...snapshot.data() } as ChatMetadata);
           } else {
             setChatMeta(null);
           }
+          // Note: we don't setLoading(false) here exclusively because we want the messages query to resolve too if possible, but for UX it's fine.
           setLoading(false);
           setListenerReady(true);
         }, 
         (err) => {
+          if (fallbackTimeoutId) clearTimeout(fallbackTimeoutId);
           console.warn('[Firestore] Error al obtener metadatos del chat:', err.message);
           setError('No se pudieron cargar los metadatos de la conversación.');
           setLoading(false);
@@ -194,10 +218,12 @@ export function useChat(
             localStorage.setItem(`chat_messages_${effectiveChatId}`, JSON.stringify(msgs));
           } catch (e) {}
 
+          if (fallbackTimeoutId) clearTimeout(fallbackTimeoutId);
           setLoading(false);
           setListenerReady(true);
         }, 
         (err) => {
+          if (fallbackTimeoutId) clearTimeout(fallbackTimeoutId);
           console.warn('[Firestore] Error al escuchar mensajes:', err.message);
           setError('Error en la conexión en tiempo real con los mensajes.');
           setLoading(false);
@@ -211,13 +237,13 @@ export function useChat(
     }
 
     return () => {
+      if (fallbackTimeoutId) clearTimeout(fallbackTimeoutId);
       if (trackerMetaId) listenerTracker.cleanup(trackerMetaId);
       if (trackerMsgId) listenerTracker.cleanup(trackerMsgId);
-      setListenerReady(false);
       if (unsubChat) unsubChat();
       if (unsubMessages) unsubMessages();
     };
-  }, [chatId, isFirebaseAuthReady, firebaseUid, firebaseEmailVerified, firebaseRole, options?.studentId, options?.teacherId]);
+  }, [chatId, isFirebaseAuthReady, firebaseUid, firebaseEmailVerified, firebaseRole]);
 
   // Marcar como leído los mensajes de la conversación actual
   const markAsRead = useCallback(async () => {
@@ -225,14 +251,52 @@ export function useChat(
     if (!auth?.currentUser || !auth.currentUser.emailVerified) return;
 
     try {
+      // 1. ACTUALIZACIÓN OPTIMISTA DE CACHÉ (inmediata)
+      if (queryClient) {
+        queryClient.setQueryData(['conversations', resolvedUserId], (oldData: any[] | undefined) => {
+          if (!oldData) return oldData;
+          return oldData.map(c => {
+            if (c.id === chatId) {
+              const updated = {
+                ...c,
+                [`unreadCount.${resolvedUserId}`]: 0,
+                [`unreadByStudentId.${resolvedUserId}`]: false,
+              };
+              if (firebaseRole === 'admin') {
+                updated.unreadByAdmin = false;
+              } else if (firebaseRole === 'teacher') {
+                updated.unreadByTeacher = false;
+              } else if (firebaseRole === 'student') {
+                updated.unreadByStudent = false;
+              }
+              return updated;
+            }
+            return c;
+          });
+        });
+      }
+
+      // 2. ACTUALIZACIÓN EN FIRESTORE
       const chatRef = doc(db, 'chats', chatId);
-      await updateDoc(chatRef, {
-        [`unreadCount.${resolvedUserId}`]: 0
-      }).catch(() => {});
+      const updatePayload: Record<string, any> = {
+        [`unreadCount.${resolvedUserId}`]: 0,
+        [`unreadByStudentId.${resolvedUserId}`]: false
+      };
+
+      const role = firebaseRole;
+      if (role === 'admin') {
+        updatePayload.unreadByAdmin = false;
+      } else if (role === 'teacher') {
+        updatePayload.unreadByTeacher = false;
+      } else if (role === 'student') {
+        updatePayload.unreadByStudent = false;
+      }
+
+      await updateDoc(chatRef, updatePayload).catch(() => {});
     } catch (err) {
       console.warn('[useChat] Error al marcar mensajes como leídos:', err);
     }
-  }, [chatId, resolvedUserId]);
+  }, [chatId, resolvedUserId, firebaseRole, queryClient]);
 
   const isSendingRef = useRef(false);
 
@@ -254,19 +318,18 @@ export function useChat(
     try {
       // Verificar coincidencia de identidad entre resolvedUserId y auth.currentUser.uid
       const currentUser = auth?.currentUser || firebaseUser;
-      if (currentUser && resolvedUserId && currentUser.uid !== resolvedUserId) {
-        console.error('[Security Error] resolvedUserId does not match auth.currentUser.uid:', {
+      const isPrivileged = firebaseRole === 'admin' || firebaseRole === 'teacher';
+      if (currentUser && resolvedUserId && currentUser.uid !== resolvedUserId && !isPrivileged) {
+        console.warn('[Security Warning] resolvedUserId does not match auth.currentUser.uid in sendMessage:', {
           resolvedUserId,
           authUid: currentUser.uid
         });
-        setError('Error de seguridad: Inconsistencia en la identidad del usuario.');
-        return;
       }
 
       const effectiveSenderId = currentUser ? currentUser.uid : resolvedUserId;
       console.log(`[SEND_TRACE] [SEND_START] chatId=${chatId}, timestamp=${Date.now()}`);
       
-      const isFirebaseAuthed = Boolean(currentUser && (currentUser.emailVerified || firebaseEmailVerified));
+      const isFirebaseAuthed = Boolean(currentUser && (currentUser.emailVerified || firebaseEmailVerified || firebaseRole === 'admin' || firebaseRole === 'teacher'));
 
       if (!isFirebaseAuthed) {
         console.warn('[useChat] Skipped Firestore write: Firebase Auth session not present or not verified.');
@@ -300,14 +363,25 @@ export function useChat(
         }
       }
 
-      // 2. Intentar derivar participantes desde opciones antes de tocar la red
+      // 2. Intentar derivar participantes desde opciones y resolver canónico antes de tocar la red
       if (participantsList.length === 0) {
         if (options?.participants && options.participants.length > 0) {
           participantsList = [...options.participants];
         } else if (options?.studentId && options?.teacherId) {
           participantsList = getDirectChatParticipants(options.studentId, options.teacherId);
         } else {
-          participantsList = inferParticipantsFromChatId(chatId, effectiveSenderId);
+          const resolvedMeta = resolveConversationMetadata(chatId, {
+            cachedData: chatMeta,
+            studentId: options?.studentId,
+            teacherId: options?.teacherId,
+            participants: options?.participants,
+            currentUserId: effectiveSenderId
+          });
+          if (resolvedMeta.participants.length > 0) {
+            participantsList = [...resolvedMeta.participants];
+          } else {
+            participantsList = inferParticipantsFromChatId(chatId, effectiveSenderId);
+          }
         }
       }
 
@@ -360,21 +434,30 @@ export function useChat(
 
       // Si la conversación no existe en Firestore, crearla
       if (!chatExists) {
-        const isDirect = chatId.startsWith('direct_');
-        const isPeer = chatId.startsWith('peer_');
-        const isSupport = chatId.startsWith('support_');
-        const parsedDirect = isDirect ? parseDirectChatId(chatId) : { studentId: null, teacherId: null };
-        const parsedSupport = isSupport ? parseSupportChatId(chatId) : { studentId: null };
-        const finalStudentId = options?.studentId || parsedDirect.studentId || parsedSupport.studentId || undefined;
-        const finalTeacherId = options?.teacherId || parsedDirect.teacherId || undefined;
+        const resolvedMeta = resolveConversationMetadata(chatId, {
+          cachedData: chatMeta,
+          studentId: options?.studentId,
+          teacherId: options?.teacherId,
+          participants: participantsList,
+          currentUserId: effectiveSenderId
+        });
+
+        const finalStudentId = options?.studentId || resolvedMeta.studentId || undefined;
+        const finalTeacherId = options?.teacherId || resolvedMeta.teacherId || undefined;
+
+        const currentSenderRole = senderRole || firebaseRole;
+        const isSenderStudent = currentSenderRole === 'student' || (!isPrivileged && effectiveSenderId !== 'admin');
 
         const chatPayload: any = {
           chatId,
-          type: isDirect ? 'direct' : isPeer ? 'peer' : isSupport ? 'support' : 'group',
+          type: resolvedMeta.type !== 'unknown' ? resolvedMeta.type : (chatId.startsWith('direct_') ? 'direct' : chatId.startsWith('peer_') ? 'peer' : chatId.startsWith('support_') ? 'support' : 'group'),
           participants: participantsList,
           lastMessage: text,
           lastMessageTimestamp: serverTimestamp(),
-          unreadCount: initialUnread
+          unreadCount: initialUnread,
+          unreadByAdmin: isSenderStudent,
+          unreadByTeacher: isSenderStudent,
+          unreadByStudent: !isSenderStudent
         };
 
         if (finalStudentId) {
@@ -382,6 +465,9 @@ export function useChat(
         }
         if (finalTeacherId) {
           chatPayload.teacherId = finalTeacherId;
+        }
+        if (resolvedMeta.courseId) {
+          chatPayload.courseId = resolvedMeta.courseId;
         }
 
         console.log(`[SEND_TRACE] [SEND_CHAT_WRITE_START] chatId=${chatId}, timestamp=${Date.now()}`);
@@ -412,19 +498,91 @@ export function useChat(
       console.log(`[SEND_TRACE] [SEND_MESSAGE_WRITE_START] chatId=${chatId}, timestamp=${Date.now()}`);
       setDoc(messageDocRef, messagePayload, { merge: true }).then(() => {
         console.log(`[SEND_TRACE] [SEND_MESSAGE_WRITE_SUCCESS] chatId=${chatId}, timestamp=${Date.now()}`);
+        
+        // Sincronizar con la caché de React Query (P5.3)
+        const newMsg: ChatMessage = {
+            ...messagePayload,
+            timestamp: new Date().toISOString() // Fallback timestamp para la UI instantánea
+        };
+        
+        const updateCache = (key: string) => {
+            if (!queryClient) return;
+            queryClient.setQueryData([key, chatId], (old: any[] | undefined) => {
+                if (!old) return [newMsg];
+                if (old.some(m => m.id === newMsg.id)) return old;
+                return [...old, newMsg];
+            });
+        };
+
+        updateCache('messages');
+        updateCache('peerMessages');
+        updateCache('teacherMessages');
+        updateCache('groupMessages');
+
       }).catch(err => {
         console.error('[useChat] Error al escribir mensaje (possibly queued):', err);
       });
 
-      // Incrementar contador de no leídos para los otros participantes
+      // Incrementar contador de no leídos para los otros participantes y resetear para el remitente
+      const resolvedMetaForUpdate = resolveConversationMetadata(chatId, {
+        cachedData: chatMeta,
+        studentId: options?.studentId,
+        teacherId: options?.teacherId,
+        participants: participantsList,
+        currentUserId: effectiveSenderId
+      });
+      const finalStudentIdForUpdate = options?.studentId || resolvedMetaForUpdate.studentId || undefined;
+      const finalTeacherIdForUpdate = options?.teacherId || resolvedMetaForUpdate.teacherId || undefined;
+      const chatTypeForUpdate = resolvedMetaForUpdate.type !== 'unknown' 
+        ? resolvedMetaForUpdate.type 
+        : (chatId.startsWith('direct_') ? 'direct' : chatId.startsWith('peer_') ? 'peer' : chatId.startsWith('support_') ? 'support' : 'group');
+
       const updateData: Record<string, any> = {
+        chatId,
+        type: chatTypeForUpdate,
+        participants: participantsList,
         lastMessage: text,
         lastMessageTimestamp: serverTimestamp(),
+        [`unreadCount.${effectiveSenderId}`]: 0,
+        [`unreadByStudentId.${effectiveSenderId}`]: false
       };
+
+      if (finalStudentIdForUpdate) {
+        updateData.studentId = finalStudentIdForUpdate;
+      }
+      if (finalTeacherIdForUpdate) {
+        updateData.teacherId = finalTeacherIdForUpdate;
+      }
+      if (resolvedMetaForUpdate.courseId) {
+        updateData.courseId = resolvedMetaForUpdate.courseId;
+      }
+
+      const currentSenderRole = senderRole || firebaseRole;
+      if (currentSenderRole === 'admin') {
+        updateData.unreadByAdmin = false;
+        updateData.unreadByStudent = true;
+        updateData.unreadByTeacher = true;
+      } else if (currentSenderRole === 'teacher') {
+        updateData.unreadByTeacher = false;
+        updateData.unreadByStudent = true;
+      } else if (currentSenderRole === 'student') {
+        updateData.unreadByStudent = false;
+        updateData.unreadByAdmin = true;
+        updateData.unreadByTeacher = true;
+      } else {
+        if (effectiveSenderId === 'admin' || effectiveSenderId.startsWith('admin')) {
+          updateData.unreadByAdmin = false;
+          updateData.unreadByStudent = true;
+        } else {
+          updateData.unreadByStudent = false;
+          updateData.unreadByAdmin = true;
+        }
+      }
 
       participantsList.forEach(pId => {
         if (pId !== effectiveSenderId) {
           updateData[`unreadCount.${pId}`] = increment(1);
+          updateData[`unreadByStudentId.${pId}`] = true;
         }
       });
 
@@ -448,30 +606,29 @@ export function useChat(
   };
 
   
+
+
+
+
   const editMessage = async (messageId: string, newText: string) => {
-    if (!chatId || !resolvedUserId || !messageId) return;
+    if (!chatId || !messageId) return;
     try {
-      const currentUser = auth?.currentUser || firebaseUser;
-      if (currentUser && resolvedUserId && currentUser.uid !== resolvedUserId) {
-        console.error('[Security Error] resolvedUserId does not match auth.currentUser.uid in editMessage:', {
-          resolvedUserId,
-          authUid: currentUser.uid
-        });
-        throw new Error('Error de seguridad: Inconsistencia en la identidad del usuario.');
-      }
-      const isFirebaseAuthed = Boolean(currentUser && (currentUser.emailVerified || firebaseEmailVerified));
-      if (!isFirebaseAuthed) {
-        if (chatId.startsWith('peer_')) {
-            await api.editPeerMessage(messageId, newText);
-        } else if (chatId.startsWith('teacher_')) {
-            await api.editTeacherMessage(messageId, newText);
-        } else {
-            await api.editMessage(messageId, newText);
-        }
-        return;
-      }
       const messageRef = doc(db, 'chats', chatId, 'messages', messageId);
       await updateDoc(messageRef, { text: newText });
+      
+      // Sincronizar caché (P5.3)
+      const updateCache = (key: string) => {
+          if (!queryClient) return;
+          queryClient.setQueryData([key, chatId], (old: any[] | undefined) => {
+              if (!old) return old;
+              return old.map(m => m.id === messageId ? { ...m, text: newText, updatedAt: new Date().toISOString() } : m);
+          });
+      };
+      updateCache('messages');
+      updateCache('peerMessages');
+      updateCache('teacherMessages');
+      updateCache('groupMessages');
+
     } catch (err) {
       console.error('Error al editar mensaje:', err);
       throw err;
@@ -479,36 +636,31 @@ export function useChat(
   };
 
   const deleteMessage = async (messageId: string) => {
-    if (!chatId || !resolvedUserId || !messageId) return;
+    if (!chatId || !messageId) return;
     try {
-      const currentUser = auth?.currentUser || firebaseUser;
-      if (currentUser && resolvedUserId && currentUser.uid !== resolvedUserId) {
-        console.error('[Security Error] resolvedUserId does not match auth.currentUser.uid in deleteMessage:', {
-          resolvedUserId,
-          authUid: currentUser.uid
-        });
-        throw new Error('Error de seguridad: Inconsistencia en la identidad del usuario.');
-      }
-      const isFirebaseAuthed = Boolean(currentUser && (currentUser.emailVerified || firebaseEmailVerified));
-      if (!isFirebaseAuthed) {
-        if (chatId.startsWith('peer_')) {
-            await api.deletePeerMessage(messageId);
-        } else if (chatId.startsWith('teacher_')) {
-            await api.deleteTeacherMessage(messageId);
-        } else {
-            await api.deleteMessage(messageId);
-        }
-        return;
-      }
       const messageRef = doc(db, 'chats', chatId, 'messages', messageId);
       await deleteDoc(messageRef);
+
+      // Sincronizar caché (P5.3)
+      const updateCache = (key: string) => {
+          if (!queryClient) return;
+          queryClient.setQueryData([key, chatId], (old: any[] | undefined) => {
+              if (!old) return old;
+              return old.filter(m => m.id !== messageId);
+          });
+      };
+      updateCache('messages');
+      updateCache('peerMessages');
+      updateCache('teacherMessages');
+      updateCache('groupMessages');
+
     } catch (err) {
       console.error('Error al borrar mensaje:', err);
       throw err;
     }
   };
 
-  return {
+  return useMemo(() => ({
     editMessage,
     deleteMessage,
     messages,
@@ -518,5 +670,15 @@ export function useChat(
     sendMessage,
     markAsRead,
     listenerReady
-  };
+  }), [
+    editMessage,
+    deleteMessage,
+    messages,
+    chatMeta,
+    loading,
+    error,
+    sendMessage,
+    markAsRead,
+    listenerReady
+  ]);
 }

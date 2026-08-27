@@ -21,8 +21,8 @@ export const TeacherActiveChatsBar: React.FC = () => {
     });
 
     const { data: conversations } = useQuery({
-        queryKey: ['conversations'],
-        queryFn: api.fetchConversations,
+        queryKey: ['conversations', user?.id],
+        queryFn: () => api.fetchUserChatsFromFirestore(user?.id || ''),
         enabled: false, // Componente desactivado (retorna null)
         staleTime: 30000
     });

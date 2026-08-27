@@ -17,6 +17,7 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
+var __reExport = (target, mod, secondTarget) => (__copyProps(target, mod, "default"), secondTarget && __copyProps(secondTarget, mod, "default"));
 var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
   // If the importer is in node compatibility mode or this is not an ESM
   // file that has been converted to a CommonJS file using a Babel-
@@ -31,11 +32,15 @@ __export(index_exports, {
   CHAT_RETENTION_DAYS: () => CHAT_RETENTION_DAYS,
   FIRESTORE_DATABASE_ID: () => FIRESTORE_DATABASE_ID,
   adminClearChatMessages: () => adminClearChatMessages,
+  adminCreateWhatsappJob: () => adminCreateWhatsappJob,
   adminSetUserClaims: () => adminSetUserClaims,
   callSimpleAI: () => callSimpleAI,
   callTutorAI: () => callTutorAI,
   getEffectiveActivityTimestamp: () => getEffectiveActivityTimestamp,
+  processPendingWhatsappQueueTrigger: () => processPendingWhatsappQueueTrigger,
   scheduledChatRetentionCleanup: () => scheduledChatRetentionCleanup,
+  scheduledWhatsappAlertScheduler: () => scheduledWhatsappAlertScheduler,
+  scheduledWhatsappQueueWorker: () => scheduledWhatsappQueueWorker,
   syncUserRole: () => syncUserRole,
   toValidDate: () => toValidDate
 });
@@ -46,6 +51,8 @@ var import_scheduler = require("firebase-functions/v2/scheduler");
 var admin = __toESM(require("firebase-admin"));
 var import_firestore2 = require("firebase-admin/firestore");
 var import_genai = require("@google/genai");
+__reExport(index_exports, require("./whatsappService"), module.exports);
+var import_whatsappService = require("./whatsappService");
 if (!admin.apps.length) {
   admin.initializeApp();
 }
@@ -494,16 +501,293 @@ const adminClearChatMessages = functions.region("europe-west1").https.onCall(asy
     throw new functions.https.HttpsError("internal", err.message || "Error al vaciar chat.");
   }
 });
+const scheduledWhatsappAlertScheduler = (0, import_scheduler.onSchedule)(
+  {
+    schedule: "every 2 minutes",
+    timeZone: "Europe/Madrid",
+    region: "europe-west1"
+  },
+  async () => {
+    const now = /* @__PURE__ */ new Date();
+    console.log(`[scheduledWhatsappAlertScheduler] Ejecutando evaluador de recordatorios a las ${now.toISOString()}`);
+    let queuedJobsCount = 0;
+    try {
+      let appConfig = {};
+      const configDoc = await db.collection("firestore_app_config").doc("main").get().catch(() => null);
+      if (configDoc && configDoc.exists) {
+        appConfig = configDoc.data() || {};
+      }
+      const adminPhone = appConfig.supportPhone || appConfig.adminPhone || process.env.ADMIN_WHATSAPP_PHONE || "";
+      const tutoringSnap = await db.collection("firestore_tutoring_requests").where("status", "==", "confirmed").get().catch(() => null);
+      if (tutoringSnap && !tutoringSnap.empty) {
+        for (const tDoc of tutoringSnap.docs) {
+          const req = tDoc.data();
+          if (req.whatsappSent === true || !req.date || !req.time) continue;
+          const cleanDate = String(req.date).split("T")[0];
+          const eventDateTime = /* @__PURE__ */ new Date(`${cleanDate}T${req.time}:00`);
+          if (isNaN(eventDateTime.getTime())) continue;
+          const diffMinutes = (eventDateTime.getTime() - now.getTime()) / (1e3 * 60);
+          if (diffMinutes > -15 && diffMinutes <= 30) {
+            console.log(`[scheduledWhatsappAlertScheduler] Encolando recordatorio para tutor\xEDa ${tDoc.id} (${diffMinutes.toFixed(1)} min restantes)`);
+            let studentPhone = "";
+            let studentName = req.studentName || "Estudiante";
+            if (req.studentId) {
+              const uDoc = await db.collection("firestore_users").doc(req.studentId).get().catch(() => null);
+              if (uDoc && uDoc.exists) {
+                studentPhone = uDoc.data()?.phone || "";
+                studentName = uDoc.data()?.name || studentName;
+              }
+            }
+            let teacherPhone = "";
+            let teacherName = req.teacherName || "Docente";
+            if (req.teacherId) {
+              const teacherDoc = await db.collection("firestore_teachers").doc(req.teacherId).get().catch(() => null);
+              if (teacherDoc && teacherDoc.exists) {
+                teacherPhone = teacherDoc.data()?.phone || "";
+                teacherName = teacherDoc.data()?.name || teacherName;
+              } else {
+                const uDoc = await db.collection("firestore_users").doc(req.teacherId).get().catch(() => null);
+                if (uDoc && uDoc.exists) {
+                  teacherPhone = uDoc.data()?.phone || "";
+                  teacherName = uDoc.data()?.name || teacherName;
+                }
+              }
+            }
+            if (studentPhone) {
+              const job = await (0, import_whatsappService.enqueueWhatsappJobIdempotent)(db, {
+                sourceType: "tutoring",
+                sourceId: tDoc.id,
+                recipientRole: "student",
+                timeSlot: "30min",
+                to: studentPhone,
+                message: `\u23F0 \xA1Hola ${studentName}! Recuerda que tu tutor\xEDa de ${req.subject || "Clase"} comienza en 30 minutos (a las ${req.time}). Profesor: ${teacherName}. \xA1Nos vemos en el aula!`
+              });
+              if (job.created) queuedJobsCount++;
+            }
+            if (teacherPhone) {
+              const job = await (0, import_whatsappService.enqueueWhatsappJobIdempotent)(db, {
+                sourceType: "tutoring",
+                sourceId: tDoc.id,
+                recipientRole: "teacher",
+                timeSlot: "30min",
+                to: teacherPhone,
+                message: `\u23F0 \xA1Hola ${teacherName}! Recuerda que tienes clase de tutor\xEDa de ${req.subject || "Clase"} con ${studentName} en 30 minutos (a las ${req.time}).`
+              });
+              if (job.created) queuedJobsCount++;
+            }
+            if (adminPhone) {
+              const job = await (0, import_whatsappService.enqueueWhatsappJobIdempotent)(db, {
+                sourceType: "tutoring",
+                sourceId: tDoc.id,
+                recipientRole: "admin",
+                timeSlot: "30min",
+                to: adminPhone,
+                message: `\u23F0 [Aviso Admin] Tutor\xEDa de ${req.subject || "Clase"} entre el Alumno ${studentName} y el Profesor ${teacherName} comienza en 30 minutos (a las ${req.time}).`
+              });
+              if (job.created) queuedJobsCount++;
+            }
+            await tDoc.ref.update({
+              whatsappSent: true,
+              whatsappQueuedAt: import_firestore2.FieldValue.serverTimestamp()
+            }).catch(console.error);
+          }
+        }
+      }
+      const agendaSnap = await db.collection("firestore_agenda_events").get().catch(() => null);
+      if (agendaSnap && !agendaSnap.empty) {
+        for (const evDoc of agendaSnap.docs) {
+          const ev = evDoc.data();
+          if (ev.whatsappSent === true || !ev.date) continue;
+          const cleanDate = String(ev.date).split("T")[0];
+          const eventTime = ev.time || "09:00";
+          const eventDateTime = /* @__PURE__ */ new Date(`${cleanDate}T${eventTime}:00`);
+          if (isNaN(eventDateTime.getTime())) continue;
+          const diffMinutes = (eventDateTime.getTime() - now.getTime()) / (1e3 * 60);
+          if (diffMinutes > -15 && diffMinutes <= 30) {
+            console.log(`[scheduledWhatsappAlertScheduler] Encolando recordatorio para evento de agenda ${evDoc.id} (${diffMinutes.toFixed(1)} min restantes)`);
+            let studentPhone = "";
+            let studentName = "Estudiante";
+            let teacherPhone = "";
+            let teacherName = "";
+            if (ev.studentId) {
+              const uDoc = await db.collection("firestore_users").doc(ev.studentId).get().catch(() => null);
+              if (uDoc && uDoc.exists) {
+                const uData = uDoc.data();
+                studentPhone = uData?.phone || "";
+                studentName = uData?.name || studentName;
+                if (uData?.assignedTeacherId) {
+                  const tDoc = await db.collection("firestore_teachers").doc(uData.assignedTeacherId).get().catch(() => null);
+                  if (tDoc && tDoc.exists) {
+                    teacherPhone = tDoc.data()?.phone || "";
+                    teacherName = tDoc.data()?.name || "";
+                  }
+                }
+              }
+            }
+            if (studentPhone) {
+              const job = await (0, import_whatsappService.enqueueWhatsappJobIdempotent)(db, {
+                sourceType: "agenda",
+                sourceId: evDoc.id,
+                recipientRole: "student",
+                timeSlot: "30min",
+                to: studentPhone,
+                message: `\u23F0 \xA1Hola ${studentName}! Recordatorio de tu Agenda: "${ev.title || "Evento"}" est\xE1 programado para hoy a las ${eventTime} (comienza en 30 minutos). \xA1Muchos \xE9xitos!`
+              });
+              if (job.created) queuedJobsCount++;
+            }
+            if (teacherPhone) {
+              const job = await (0, import_whatsappService.enqueueWhatsappJobIdempotent)(db, {
+                sourceType: "agenda",
+                sourceId: evDoc.id,
+                recipientRole: "teacher",
+                timeSlot: "30min",
+                to: teacherPhone,
+                message: `\u23F0 \xA1Hola ${teacherName}! Recordatorio de Agenda: El alumno ${studentName} tiene el evento "${ev.title || "Evento"}" programado en 30 minutos (a las ${eventTime}).`
+              });
+              if (job.created) queuedJobsCount++;
+            }
+            if (adminPhone) {
+              const job = await (0, import_whatsappService.enqueueWhatsappJobIdempotent)(db, {
+                sourceType: "agenda",
+                sourceId: evDoc.id,
+                recipientRole: "admin",
+                timeSlot: "30min",
+                to: adminPhone,
+                message: `\u23F0 [Aviso Admin Agenda] Evento "${ev.title || "Evento"}" del Alumno ${studentName} comienza en 30 minutos (a las ${eventTime}).`
+              });
+              if (job.created) queuedJobsCount++;
+            }
+            await evDoc.ref.update({
+              whatsappSent: true,
+              whatsappQueuedAt: import_firestore2.FieldValue.serverTimestamp()
+            }).catch(console.error);
+          }
+        }
+      }
+      console.log(`[scheduledWhatsappAlertScheduler] Finalizado. Total de trabajos encolados: ${queuedJobsCount}`);
+      return { success: true, queuedJobsCount };
+    } catch (err) {
+      console.error("[scheduledWhatsappAlertScheduler] Error cr\xEDtico:", err);
+      throw err;
+    }
+  }
+);
+const processPendingWhatsappQueueTrigger = (0, import_firestore.onDocumentWritten)(
+  {
+    region: "europe-west1",
+    database: FIRESTORE_DATABASE_ID,
+    document: "whatsapp_queue/{queueId}"
+  },
+  async (event) => {
+    const queueId = event.params.queueId;
+    const change = event.data;
+    if (!change || !change.after.exists) return;
+    const data = change.after.data();
+    if (data.status !== "pending" && data.status !== "retry") return;
+    const workerId = `trigger_${queueId}_${Date.now()}`;
+    const claim = await (0, import_whatsappService.claimWhatsappQueueJob)(db, queueId, workerId);
+    if (!claim.claimed || !claim.item) {
+      return;
+    }
+    let appConfig = {};
+    const configDoc = await db.collection("firestore_app_config").doc("main").get().catch(() => null);
+    if (configDoc && configDoc.exists) {
+      appConfig = configDoc.data();
+    }
+    await (0, import_whatsappService.executeWhatsappQueueJob)(db, claim.item, workerId, appConfig);
+  }
+);
+const scheduledWhatsappQueueWorker = (0, import_scheduler.onSchedule)(
+  {
+    schedule: "every 1 minutes",
+    timeZone: "Europe/Madrid",
+    region: "europe-west1"
+  },
+  async () => {
+    const now = /* @__PURE__ */ new Date();
+    const workerId = `worker_cron_${now.getTime()}`;
+    console.log(`[scheduledWhatsappQueueWorker] Ejecutando worker de cola (${workerId})`);
+    let appConfig = {};
+    const configDoc = await db.collection("firestore_app_config").doc("main").get().catch(() => null);
+    if (configDoc && configDoc.exists) {
+      appConfig = configDoc.data();
+    }
+    const snap = await db.collection("whatsapp_queue").where("status", "in", ["pending", "retry", "processing"]).limit(20).get().catch(() => null);
+    if (!snap || snap.empty) {
+      return { success: true, processedCount: 0 };
+    }
+    let processedCount = 0;
+    for (const docSnap of snap.docs) {
+      const claim = await (0, import_whatsappService.claimWhatsappQueueJob)(db, docSnap.id, workerId, now);
+      if (claim.claimed && claim.item) {
+        await (0, import_whatsappService.executeWhatsappQueueJob)(db, claim.item, workerId, appConfig);
+        processedCount++;
+      }
+    }
+    console.log(`[scheduledWhatsappQueueWorker] Finalizado. Trabajos procesados: ${processedCount}`);
+    return { success: true, processedCount };
+  }
+);
+const adminCreateWhatsappJob = functions.region("europe-west1").https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError("unauthenticated", "Se requiere autenticaci\xF3n.");
+  }
+  const callerClaims = context.auth.token || {};
+  if (callerClaims.role !== "admin") {
+    throw new functions.https.HttpsError("permission-denied", "Operaci\xF3n exclusiva para administradores.");
+  }
+  const { to, message, recipientRole = "student", sourceType = "manual_admin", sourceId = "admin_direct" } = data;
+  if (!to || !message) {
+    throw new functions.https.HttpsError("invalid-argument", "Se requiere 'to' y 'message'.");
+  }
+  try {
+    const uniqueId = `manual_${context.auth.uid}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const docRef = db.collection("whatsapp_queue").doc(uniqueId);
+    const newJob = {
+      queueId: uniqueId,
+      to,
+      message,
+      recipientRole,
+      sourceType,
+      sourceId,
+      status: "pending",
+      attemptCount: 0,
+      maxAttempts: 3,
+      lockedUntil: null,
+      processingBy: null,
+      providerMessageId: null,
+      errorCode: null,
+      lastError: null,
+      createdAt: import_firestore2.FieldValue.serverTimestamp(),
+      updatedAt: import_firestore2.FieldValue.serverTimestamp(),
+      nextAttemptAt: null
+    };
+    await docRef.set(newJob);
+    return {
+      success: true,
+      queueId: uniqueId,
+      message: `Mensaje encolado en backend con ID: ${uniqueId}`
+    };
+  } catch (err) {
+    console.error("[adminCreateWhatsappJob] Error:", err);
+    throw new functions.https.HttpsError("internal", err.message || "Error al encolar mensaje.");
+  }
+});
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CHAT_RETENTION_DAYS,
   FIRESTORE_DATABASE_ID,
   adminClearChatMessages,
+  adminCreateWhatsappJob,
   adminSetUserClaims,
   callSimpleAI,
   callTutorAI,
   getEffectiveActivityTimestamp,
+  processPendingWhatsappQueueTrigger,
   scheduledChatRetentionCleanup,
+  scheduledWhatsappAlertScheduler,
+  scheduledWhatsappQueueWorker,
   syncUserRole,
-  toValidDate
+  toValidDate,
+  ...require("./whatsappService")
 });

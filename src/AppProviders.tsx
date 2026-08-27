@@ -17,6 +17,7 @@ import { auth } from './services/firebase';
 import { eventEmitter } from './services/eventService';
 import { FirestoreTestViewer } from './components/FirestoreTestViewer';
 import { RealtimeAlertsBanner } from './components/RealtimeAlertsBanner';
+import { FirestoreInitializer } from './components/FirestoreInitializer';
 
 const queryClient = new QueryClient({
     defaultOptions: {
@@ -41,14 +42,6 @@ queryClient.getQueryCache().subscribe((event) => {
     }
 });
 
-/**
- * Agrupa providers por dominio jerárquico
- * - Tier 1: Infra (Theme, I18n, Query)
- * - Tier 2: Auth (Auth, Config)
- * - Tier 3: UI State (Notifications, Modals)
- * - Tier 4: Feature (Progress, Gamification, Chat, Comments)
- */
-
 // Tier 1: Infraestructura base (sin dependencias de negocio)
 const InfraProviders: React.FC<{ children: ReactNode }> = ({ children }) => (
     <ThemeProvider>
@@ -63,6 +56,7 @@ const InfraProviders: React.FC<{ children: ReactNode }> = ({ children }) => (
 // Tier 2: Autenticación y configuración global de la aplicación
 const AuthProviders: React.FC<{ children: ReactNode }> = ({ children }) => (
     <AuthProvider>
+        <FirestoreInitializer />
         <AppConfigProvider>
             {children}
         </AppConfigProvider>
@@ -98,10 +92,8 @@ const FeatureProviders: React.FC<{ children: ReactNode }> = ({ children }) => (
 // Composición limpia, jerárquica y segura de los proveedores
 export const AppProviders: React.FC<{ children: ReactNode }> = ({ children }) => {
     useEffect(() => {
-        // Inicializar sincronizadores globales de Firestore
+        // Inicializar sincronizador global de config (no requiere auth)
         initAppConfigSync();
-        console.log(`[F110.30] [FSYNC_START] | timestamp: ${performance.now()}`);
-        initFirestoreSync();
 
         // Limpiar la caché de React Query al cerrar sesión para evitar fuga de datos
         const handleLogout = () => {

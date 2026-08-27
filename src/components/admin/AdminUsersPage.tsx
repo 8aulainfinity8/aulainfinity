@@ -6,6 +6,8 @@ import { ChevronLeftIcon, CheckCircleIcon, XCircleIcon, SearchIcon, TrashIcon, P
 import { NotificationContext } from '../../contexts/NotificationContext';
 import { AdminNotificationContext } from '../../contexts/AdminNotificationContext';
 import { AppConfigContext } from '../../contexts/AppConfigContext';
+import { AuthContext } from '../../contexts/AuthContext';
+import { auth } from '../../services/firebase';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ROUTES } from '../../constants/routes';
 import { ConfirmationModal } from '../ConfirmationModal';
@@ -1126,6 +1128,7 @@ const StudentDetailDrawer: React.FC<StudentDetailDrawerProps> = ({
     const { data: answers, isLoading: answersLoading } = useQuery({
         queryKey: ['student-answers', student.id],
         queryFn: () => api.fetchStudentAnswers(student.id),
+        enabled: !!student.id && !!auth.currentUser,
     });
 
     const updateNotesMutation = useMutation({
@@ -1540,6 +1543,7 @@ const StudentDetailDrawer: React.FC<StudentDetailDrawerProps> = ({
 };
 
 export const AdminUsersPage: React.FC = () => {
+    const { user } = useContext(AuthContext);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const location = useLocation();
@@ -1637,16 +1641,19 @@ export const AdminUsersPage: React.FC = () => {
     const { data: users, isLoading: usersLoading, isError: usersError, refetch: refetchUsers } = useQuery<StudentUser[]>({
         queryKey: ['users'],
         queryFn: api.fetchUsers,
+        enabled: !!user && !!user.id && !!auth.currentUser,
     });
 
     const { data: courses, isLoading: coursesLoading } = useQuery<CourseLevel[]>({
         queryKey: ['courses'],
         queryFn: api.fetchCourses,
+        enabled: !!user && !!user.id && !!auth.currentUser,
     });
 
     const { data: teachers, isLoading: teachersLoading, refetch: refetchTeachers } = useQuery<TeacherUser[]>({
         queryKey: ['teachers'],
         queryFn: api.fetchTeachers,
+        enabled: !!user && !!user.id && !!auth.currentUser,
     });
     
     const isLoading = usersLoading || coursesLoading;

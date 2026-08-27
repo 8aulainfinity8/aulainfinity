@@ -318,6 +318,11 @@ export interface Conversation {
   unreadByAdmin: boolean;
   unreadByTeacher?: boolean;
   unreadByStudent?: boolean;
+  type?: 'support' | 'direct' | 'peer' | 'group' | string;
+  status?: 'open' | 'pending' | 'resolved' | 'closed' | string;
+  closed?: boolean;
+  closedBy?: string;
+  closedAt?: string;
 }
 
 // Student peer-to-peer chat interfaces (similar to WhatsApp)

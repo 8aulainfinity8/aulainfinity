@@ -1,7 +1,7 @@
 
 
 import React, { useState, useEffect, useCallback, ReactNode, useContext, useMemo, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as api from '../services/api';
 import { AdminNotificationContext } from './AdminNotificationContext';
 import { AuthContext } from './AuthContext';
@@ -20,19 +20,13 @@ const SEEN_TEACHERS_KEY = 'seenTeacherUserIds';
 
 export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { user } = useContext(AuthContext);
+  const queryClient = useQueryClient();
   const { addToast } = useContext(NotificationContext);
   const { appConfig } = useContext(AppConfigContext);
   const [newUsersCount, setNewUsersCount] = useState(0);
   const [newSubscriptionsCount, setNewSubscriptionsCount] = useState(0);
   const [newStudentsCount, setNewStudentsCount] = useState(0);
   const [newTeachersCount, setNewTeachersCount] = useState(0);
-
-  // Refs to hold the latest reactive state for background checks (avoiding interval recreation/multiple queries)
-  const usersRef = useRef<StudentUser[] | undefined>(undefined);
-  const teachersRef = useRef<TeacherUser[] | undefined>(undefined);
-  const tutoringRequestsRef = useRef<TutoringRequest[] | undefined>(undefined);
-  const agendaEventsRef = useRef<any[] | undefined>(undefined);
-  const appConfigRef = useRef<any>(undefined);
 
   // Refs to store previous counts for notification logic
   const prevTopicRequestsCount = useRef<number | null>(null);
@@ -42,19 +36,21 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   const { data: users, refetch: refetchUsers } = useQuery<StudentUser[]>({
     queryKey: ['users'],
     queryFn: api.fetchUsers,
-    enabled: user?.role === 'admin' || user?.role === 'teacher',
+    enabled: !!user && !!user.id && !!auth.currentUser && (user?.role === 'admin' || user?.role === 'teacher'),
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: teachers, refetch: refetchTeachers } = useQuery<TeacherUser[]>({
     queryKey: ['teachers'],
     queryFn: api.fetchTeachers,
-    enabled: user?.role === 'admin' || user?.role === 'teacher',
+    enabled: !!user && !!user.id && !!auth.currentUser && (user?.role === 'admin' || user?.role === 'teacher'),
   });
 
   const { data: agendaEvents, refetch: refetchAgendaEvents } = useQuery<any[]>({
     queryKey: ['adminAgendaEvents'],
     queryFn: () => api.fetchAgendaEvents(),
-    enabled: user?.role === 'admin' || user?.role === 'teacher',
+    enabled: !!user && !!user.id && !!auth.currentUser && (user?.role === 'admin' || user?.role === 'teacher'),
   });
 
   const { 
@@ -65,7 +61,7 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   } = useQuery<TopicRequest[]>({
     queryKey: ['topicRequests'],
     queryFn: api.fetchTopicRequests,
-    enabled: user?.role === 'admin' || user?.role === 'teacher',
+    enabled: !!user && !!user.id && !!auth.currentUser && (user?.role === 'admin' || user?.role === 'teacher'),
   });
 
   const { 
@@ -76,13 +72,13 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   } = useQuery<TutoringRequest[]>({
     queryKey: ['tutoringRequests'],
     queryFn: api.fetchTutoringRequests,
-    enabled: !!user,
+    enabled: !!user && !!user.id && !!auth.currentUser,
   });
 
   const conversationsQueryResult = useQuery<Conversation[]>({
-    queryKey: ['conversations'],
-    queryFn: api.fetchConversations,
-    enabled: user?.role === 'admin' || user?.role === 'teacher',
+    queryKey: ['conversations', user?.id],
+    queryFn: () => api.fetchUserChatsFromFirestore(user!.id),
+    enabled: !!user && !!user.id && !!auth.currentUser && (user.role === 'admin' || user.role === 'teacher'),
     staleTime: 30000,
   });
 
@@ -106,7 +102,7 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   } = useQuery<CourseGroupConversation[]>({
     queryKey: ['group-conversations', user?.id],
     queryFn: () => api.fetchCourseGroupConversations(user!.id),
-    enabled: !!user && (user.role === 'admin' || user.role === 'teacher'),
+    enabled: !!user && !!user.id && !!auth.currentUser && (user.role === 'admin' || user.role === 'teacher'),
     staleTime: 30000,
   });
 
@@ -117,7 +113,7 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   } = useQuery<TeacherPayment[]>({
     queryKey: ['adminTeacherPaymentsNotifications'],
     queryFn: () => api.fetchTeacherPayments(),
-    enabled: user?.role === 'admin',
+    enabled: !!user && !!user.id && !!auth.currentUser && user?.role === 'admin',
   });
 
   const {
@@ -126,7 +122,7 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   } = useQuery<StudentPayment[]>({
     queryKey: ['adminStudentPaymentsNotifications'],
     queryFn: () => api.fetchStudentPayments(),
-    enabled: user?.role === 'admin',
+    enabled: !!user && !!user.id && !!auth.currentUser && user?.role === 'admin',
   });
 
   // --- REAL-TIME EVENT LISTENERS ---
@@ -141,13 +137,26 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
     let studentPayTimer: any = null;
     let agendaTimer: any = null;
 
-    const handleUserUpdate = () => { 
+    const handleUserUpdate = (payload?: any) => { 
       if (user.role === 'admin' || user.role === 'teacher') {
+        if (payload?.id) {
+          queryClient.setQueryData(['users'], (old: any[] | undefined) => {
+            if (!old) return old;
+            return old.map(u => u.id === payload.id ? { ...u, ...payload } : u);
+          });
+          queryClient.setQueryData(['conversations', user.id], (old: Conversation[] | undefined) => {
+            if (!old) return old;
+            return old.map(c => (c.studentId === payload.id || c.id === payload.id) ? {
+              ...c,
+              studentName: payload.name || c.studentName,
+              ...((payload.email || (c as any).studentEmail) ? { studentEmail: payload.email || (c as any).studentEmail } : {})
+            } : c);
+          });
+        }
         if (userTimer) clearTimeout(userTimer);
         userTimer = setTimeout(() => {
           refetchUsers();
           refetchTeachers();
-          refetchConversations();
         }, 500);
       }
     };
@@ -165,12 +174,40 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
         refetchTutoringRequests();
       }, 500);
     };
-    const handleMessageUpdate = () => { 
+    const handleMessageUpdate = (payload: any) => { 
       if (user.role === 'admin' || user.role === 'teacher') {
         if (messageTimer) clearTimeout(messageTimer);
         messageTimer = setTimeout(() => {
-          refetchConversations();
-          refetchGroupConversations();
+          const convoId = payload?.conversationId || payload?.courseId;
+          if (!convoId) return;
+
+          const isUnread = payload.read ? false : (payload.senderId !== user.id);
+
+          // Update private/support conversations cache
+          queryClient.setQueryData(['conversations', user.id], (oldData: Conversation[] | undefined) => {
+             if (!oldData) return oldData;
+             return oldData.map(c => c.id === convoId ? { 
+               ...c, 
+               lastMessageText: payload.read ? c.lastMessageText : (payload.text || c.lastMessageText), 
+               lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.timestamp || c.lastMessageTimestamp),
+               unreadByAdmin: user.role === 'admin' ? isUnread : c.unreadByAdmin,
+               unreadByTeacher: user.role === 'teacher' ? isUnread : c.unreadByTeacher
+             } : c);
+          });
+
+          // Update group conversations cache
+          queryClient.setQueryData(['group-conversations', user.id], (oldData: CourseGroupConversation[] | undefined) => {
+            if (!oldData) return oldData;
+            return oldData.map(c => c.id === convoId ? {
+              ...c,
+              lastMessageText: payload.read ? c.lastMessageText : (payload.text || c.lastMessageText),
+              lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.timestamp || c.lastMessageTimestamp),
+              unreadByUserId: {
+                ...c.unreadByUserId,
+                [user.id]: isUnread
+              }
+            } : c);
+          });
         }, 500);
       }
     };
@@ -371,184 +408,6 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
             prevTeacherTutoringCount.current = pendingTutoringRequestsCount;
         }
     }, [pendingTutoringRequestsCount, user, addToast]);
-
-    // Sync reactive state to refs to prevent background timer re-evaluation/looping
-    useEffect(() => {
-        usersRef.current = users;
-    }, [users]);
-
-    useEffect(() => {
-        teachersRef.current = teachers;
-    }, [teachers]);
-
-    useEffect(() => {
-        tutoringRequestsRef.current = tutoringRequests;
-    }, [tutoringRequests]);
-
-    useEffect(() => {
-        agendaEventsRef.current = agendaEvents;
-    }, [agendaEvents]);
-
-    useEffect(() => {
-        appConfigRef.current = appConfig || undefined;
-    }, [appConfig]);
-
-    // Background checker to dispatch automated WhatsApp notifications exactly 30 minutes before scheduled agenda events & tutoring sessions
-    useEffect(() => {
-        const role = user?.role;
-        if (!user || (role !== 'admin' && role !== 'teacher')) return;
-
-        const checkWhatsAppAlerts = async () => {
-            const now = Date.now();
-            const config = appConfigRef.current;
-            const currentUsers = usersRef.current || [];
-            const currentTeachers = teachersRef.current || [];
-            const currentTutoringRequests = tutoringRequestsRef.current || [];
-            const currentAgendaEvents = agendaEventsRef.current || [];
-
-            const mode = config?.whatsappMode || 'direct';
-            const adminPhone = config?.supportPhone || config?.adminPhone || '';
-
-            const apiPayload = {
-                whatsappMode: mode,
-                twilioAccountSid: config?.twilioAccountSid,
-                twilioAuthToken: config?.twilioAuthToken,
-                twilioWhatsappFrom: config?.twilioWhatsappFrom,
-                metaPhoneNumberId: config?.metaPhoneNumberId,
-                metaAccessToken: config?.metaAccessToken,
-                evolutionInstanceUrl: config?.evolutionInstanceUrl,
-                evolutionApiKey: config?.evolutionApiKey
-            };
-
-            // 1. Check Tutoring Requests (Confirmed)
-            if (currentTutoringRequests && currentTutoringRequests.length > 0) {
-                for (const req of currentTutoringRequests) {
-                    if (req.status !== 'confirmed' || req.whatsappSent || !req.date || !req.time) continue;
-
-                    try {
-                        const cleanDate = req.date.split('T')[0];
-                        const eventDateTime = new Date(`${cleanDate}T${req.time}:00`);
-                        const diffMs = eventDateTime.getTime() - now;
-                        const diffMinutes = diffMs / (1000 * 60);
-
-                        if (diffMinutes > -15 && diffMinutes <= 30) {
-                            await api.updateTutoringWhatsappSent(req.id);
-
-                            const studentUser = currentUsers.find(u => u.id === req.studentId);
-                            const studentPhone = studentUser?.phone || '';
-
-                            let teacherPhone = '';
-                            if (req.teacherId) {
-                                const teacherUser = currentTeachers.find(t => t.id === req.teacherId);
-                                if (teacherUser) teacherPhone = teacherUser.phone;
-                            }
-
-                            // Send WhatsApp to Student
-                            if (studentPhone) {
-                                await api.sendWhatsApp({
-                                    to: studentPhone,
-                                    message: `⏰ ¡Hola ${req.studentName}! Recuerda que tu tutoría de ${req.subject} comienza en 30 minutos (a las ${req.time}). Profesor: ${req.teacherName || 'Docente asignado'}. ¡Nos vemos en el aula!`,
-                                    ...apiPayload
-                                });
-                            }
-
-                            // Send WhatsApp to Teacher
-                            if (teacherPhone && req.teacherName) {
-                                await api.sendWhatsApp({
-                                    to: teacherPhone,
-                                    message: `⏰ ¡Hola ${req.teacherName}! Recuerda que tienes clase de tutoría de ${req.subject} con ${req.studentName} en 30 minutos (a las ${req.time}).`,
-                                    ...apiPayload
-                                });
-                            }
-
-                            // Send WhatsApp to Admin
-                            if (adminPhone) {
-                                await api.sendWhatsApp({
-                                    to: adminPhone,
-                                    message: `⏰ [Aviso Admin] Tutoría de ${req.subject} entre el Alumno ${req.studentName} y el Profesor ${req.teacherName || 'Docente'} comienza en 30 minutos (a las ${req.time}).`,
-                                    ...apiPayload
-                                });
-                            }
-
-                            addToast(`🟩 [WhatsApp Tutoría - 30 Min Antes] Notificación enviada a Alumno (${req.studentName}), Profesor (${req.teacherName || 'Docente'}) y Administrador.`, 'success');
-                        }
-                    } catch (e) {
-                        console.error('Error processing Tutoring WhatsApp alarm:', e);
-                    }
-                }
-            }
-
-            // 2. Check Agenda Events (Exams, Assignments, Class Events)
-            try {
-                for (const ev of currentAgendaEvents) {
-                    if (ev.whatsappSent || !ev.date) continue;
-
-                    try {
-                        const cleanDate = ev.date.split('T')[0];
-                        const eventTime = ev.time || '09:00';
-                        const eventDateTime = new Date(`${cleanDate}T${eventTime}:00`);
-                        const diffMs = eventDateTime.getTime() - now;
-                        const diffMinutes = diffMs / (1000 * 60);
-
-                        if (diffMinutes > -15 && diffMinutes <= 30) {
-                            await api.updateAgendaEvent(ev.id, { whatsappSent: true });
-
-                            const studentUser = currentUsers.find(u => u.id === ev.studentId);
-                            const studentPhone = studentUser?.phone || '';
-
-                            let teacherPhone = '';
-                            let teacherName = '';
-                            if (studentUser?.assignedTeacherId) {
-                                const teacherUser = currentTeachers.find(t => t.id === studentUser.assignedTeacherId);
-                                if (teacherUser) {
-                                    teacherPhone = teacherUser.phone;
-                                    teacherName = teacherUser.name;
-                                }
-                            }
-
-                            // Send WhatsApp to Student
-                            if (studentPhone) {
-                                await api.sendWhatsApp({
-                                    to: studentPhone,
-                                    message: `⏰ ¡Hola ${studentUser?.name || 'Estudiante'}! Recordatorio de tu Agenda: "${ev.title}" está programado para hoy a las ${eventTime} (comienza en 30 minutos). ¡Muchos éxitos!`,
-                                    ...apiPayload
-                                });
-                            }
-
-                            // Send WhatsApp to Teacher if assigned
-                            if (teacherPhone) {
-                                await api.sendWhatsApp({
-                                    to: teacherPhone,
-                                    message: `⏰ ¡Hola ${teacherName}! Recordatorio de Agenda: El alumno ${studentUser?.name || 'Estudiante'} tiene el evento "${ev.title}" programado en 30 minutos (a las ${eventTime}).`,
-                                    ...apiPayload
-                                });
-                            }
-
-                            // Send WhatsApp to Admin
-                            if (adminPhone) {
-                                await api.sendWhatsApp({
-                                    to: adminPhone,
-                                    message: `⏰ [Aviso Admin Agenda] Evento "${ev.title}" del Alumno ${studentUser?.name || 'Estudiante'} comienza en 30 minutos (a las ${eventTime}).`,
-                                    ...apiPayload
-                                });
-                            }
-
-                            addToast(`🟩 [WhatsApp Agenda - 30 Min Antes] Notificación enviada para el evento "${ev.title}".`, 'success');
-                        }
-                    } catch (e) {
-                        console.error('Error processing Agenda Event WhatsApp alarm:', e);
-                    }
-                }
-            } catch (err) {
-                console.error("Error checking agenda events in WhatsApp checker:", err);
-            }
-        };
-
-        checkWhatsAppAlerts();
-        const alarmInterval = setInterval(checkWhatsAppAlerts, 30000);
-        return () => clearInterval(alarmInterval);
-    }, [user?.id, user?.role, addToast]);
-
 
   useEffect(() => {
     if (users) {

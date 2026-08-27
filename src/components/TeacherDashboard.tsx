@@ -41,12 +41,14 @@ import { WorkloadChart } from './WorkloadChart';
 import { isTeacherMatchForSubject, isTutoringRequestForTeacher } from '../utils/tutoringHelpers';
 import { useI18n } from '../hooks/useI18n';
 import { getDirectChatId, resolveUserUid } from '../utils/chatUtils';
+import { auth } from '../services/firebase';
 
 // --- SUB-COMPONENT: FULL QUIZ QUESTION ANALYSIS DIAGNOSTIC ---
 const QuizSubmissionDetails: React.FC<{ videoId: string; answer: StudentAnswer }> = ({ videoId, answer }) => {
     const { data: quiz, isLoading } = useQuery<Quiz | null>({
         queryKey: ['quiz', videoId],
         queryFn: () => api.fetchQuizByVideoId(videoId),
+        enabled: !!videoId && !!auth.currentUser,
         staleTime: 60000,
     });
 
@@ -180,7 +182,11 @@ export const TeacherDashboard: React.FC = () => {
         return topicRequests.filter(req => req.status === 'pending');
     }, [topicRequests]);
 
-    const { data: teachers = [] } = useQuery<TeacherUser[]>({ queryKey: ['teachers'], queryFn: api.fetchTeachers, enabled: !!user });
+    const { data: teachers = [] } = useQuery<TeacherUser[]>({ 
+        queryKey: ['teachers'], 
+        queryFn: api.fetchTeachers, 
+        enabled: !!user && !!user.id && !!auth.currentUser 
+    });
 
     // Pending tutoring requests for this teacher
     const pendingTutoringRequests = useMemo(() => {

@@ -81,6 +81,12 @@ const PageLoadingFallback: React.FC = () => (
 const App: React.FC = () => {
   React.useEffect(() => {
     console.log(`[F110.45] APP_MOUNT | ${getF11045Meta()}`);
+    // Reset chunk load reload guard on successful app mount
+    try {
+      window.sessionStorage.removeItem('chunk_reload_attempted');
+    } catch {
+      // Ignore storage errors
+    }
     return () => {
       console.log(`[F110.45] APP_UNMOUNT | ${getF11045Meta()}`);
     };

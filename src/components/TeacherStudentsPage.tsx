@@ -5,6 +5,7 @@ import { AuthContext } from '../contexts/AuthContext';
 import { useI18n } from '../hooks/useI18n';
 import { ROUTES } from '../constants/routes';
 import * as api from '../services/api';
+import { auth } from '../services/firebase';
 import type { StudentUser, CourseLevel } from '../types';
 import { getDirectChatId, resolveUserUid } from '../utils/chatUtils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -44,6 +45,7 @@ export const TeacherStudentsPage: React.FC = () => {
   const { data: appConfig } = useQuery({
     queryKey: ['appConfig'],
     queryFn: api.fetchAppConfig,
+    enabled: !!user && !!user.id && !!auth.currentUser,
   });
 
   const aiEnabledGlobally = appConfig?.aiEnabled !== false;
@@ -74,15 +76,17 @@ export const TeacherStudentsPage: React.FC = () => {
 
   // Queries
   const { data: students = [], isLoading: isLoadingStudents, refetch: refetchStudents } = useQuery<StudentUser[]>({
-    queryKey: ['students-list'],
+    queryKey: ['users'],
     queryFn: api.fetchUsers,
-    enabled: hasAccess,
+    enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'teacher' && hasAccess,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: courseLevels = [] } = useQuery<CourseLevel[]>({
     queryKey: ['course-levels'],
     queryFn: api.fetchCourses,
-    enabled: hasAccess,
+    enabled: !!user && !!user.id && !!auth.currentUser && hasAccess,
   });
 
   // Automatically show selected student details when user update happens or selected student changes
@@ -138,7 +142,7 @@ export const TeacherStudentsPage: React.FC = () => {
         });
       });
       queryClient.invalidateQueries({ queryKey: ['students-list'] });
-      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      if (user?.id) queryClient.invalidateQueries({ queryKey: ['conversations', user.id] });
       triggerFeedback('success', variables.teachId ? `Has añadido a ${data.name} a tu lista de alumnos.` : `Has desvinculado a ${data.name} de tu lista.`);
     },
     onError: () => {

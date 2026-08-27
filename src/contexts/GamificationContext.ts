@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as api from '../services/api';
+import { auth } from '../services/firebase';
 import { badgesData } from '../data/badges';
 import { AuthContext } from './AuthContext';
 import { StudentProgressContext } from './StudentProgressContext';
@@ -22,12 +23,12 @@ export const GamificationProvider: React.FC<{ children: ReactNode }> = ({ childr
     const { data: courses } = useQuery<CourseLevel[]>({ 
         queryKey: ['courses'], 
         queryFn: api.fetchCourses,
-        enabled: !!user && user.role === 'student',
+        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
     });
     const { data: studentAnswers } = useQuery<StudentAnswer[]>({
         queryKey: ['studentAnswers', user?.id],
         queryFn: () => api.fetchStudentAnswers(user!.id),
-        enabled: !!user && user.role === 'student',
+        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
     });
 
     const [knownBadges, setKnownBadges] = useState<Set<string>>(() => {

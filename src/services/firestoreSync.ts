@@ -19,6 +19,7 @@ import { eventEmitter } from './eventService';
 import * as dbMock from './mockDatabase';
 import * as api from './api';
 import { listenerTracker } from './listenerTracker';
+import { resolveConversationMetadata } from '../utils/chatUtils';
 import { DirectMessage, StudentPeerMessage, CourseGroupMessage, Attachment } from '../types';
 
 let isInitialized = false;
@@ -162,40 +163,47 @@ export const initFirestoreSync = () => {
         // La sincronización inicial se puede activar de forma manual desde el panel de pruebas si es necesario.
 
         // 1. Peer Messages real-time sync
-        if (currentUserObj?.role === 'admin') {
-            const peerMsgsRef = collection(db, 'firestore_peer_messages');
-        const qPeer = query(peerMsgsRef, orderBy('createdAt', 'asc'), limit(500));
-        let isInitialPeer = true;
-        onSnapshot(qPeer, (snapshot: any) => {
-            const isInitial = isInitialPeer;
-            isInitialPeer = false;
-            snapshot.docChanges().forEach((change: any) => {
-                const data = change.doc.data() || {};
-                const msgId = data.id || change.doc.id;
-                if (change.type === 'added') {
-                    const exists = (dbMock.studentPeerMessagesData || []).some(m => m.id === msgId);
-                    if (!exists) {
-                        const newMsg: StudentPeerMessage = {
-                            id: msgId,
-                            conversationId: data.conversationId,
-                            senderId: data.senderId,
-                            senderName: data.senderName,
-                            text: data.text,
-                            timestamp: data.timestamp || new Date().toISOString(),
-                            isRead: false,
-                            attachments: data.attachments
-                        };
-                        if (dbMock.studentPeerMessagesData) {
-                            dbMock.studentPeerMessagesData.push(newMsg);
-                        }
+if (currentUserObj?.role === 'admin') {
+    const peerMsgsRef = collection(db, 'firestore_peer_messages');
+    const qPeer = query(peerMsgsRef, orderBy('createdAt', 'asc'), limit(500));
+    let isInitialPeer = true;
+    onSnapshot(qPeer, (snapshot: any) => {
+        const isInitial = isInitialPeer;
+        isInitialPeer = false;
+        snapshot.docChanges().forEach((change: any) => {
+            const data = change.doc.data() || {};
+            const msgId = data.id || change.doc.id;
+            
+            // 🔥 FASE 2: Evitar contaminación de dbMock si hay sesión real
+            const isSessionActive = !!auth.currentUser;
+            
+            if (change.type === 'added') {
+                const exists = (dbMock.studentPeerMessagesData || []).some(m => m.id === msgId);
+                if (!exists) {
+                    const newMsg: StudentPeerMessage = {
+                        id: msgId,
+                        conversationId: data.conversationId,
+                        senderId: data.senderId,
+                        senderName: data.senderName,
+                        text: data.text,
+                        timestamp: data.timestamp || new Date().toISOString(),
+                        isRead: false,
+                        attachments: data.attachments
+                    };
+                    
+                    if (!isSessionActive && dbMock.studentPeerMessagesData) {
+                        dbMock.studentPeerMessagesData.push(newMsg);
+                    }
 
-                        // Update conversation last message
+                    // Update conversation last message (sólo si no hay sesión activa o es modo DEMO)
+                    if (!isSessionActive) {
                         const convo = (dbMock.studentPeerConversationsData || []).find(c => c && c.id === data.conversationId);
                         if (convo) {
                             convo.lastMessageText = data.text;
                             convo.lastMessageTimestamp = newMsg.timestamp;
                         } else if (data.conversationId) {
-                            const parts = data.conversationId.replace('peer_', '').split('_');
+                            const resolved = resolveConversationMetadata(data.conversationId, { type: 'peer' });
+                            const parts = resolved.participants;
                             dbMock.studentPeerConversationsData.push({
                                 id: data.conversationId,
                                 participantIds: parts,
@@ -204,34 +212,39 @@ export const initFirestoreSync = () => {
                                 unreadByStudentId: {}
                             });
                         }
-                        eventEmitter.emit('peer-message-update', newMsg);
-                        if (!isInitial) {
-                            eventEmitter.emit('realtime-incoming-message', {
-                                id: msgId,
-                                text: data.text,
-                                senderId: data.senderId,
-                                senderName: data.senderName || 'Estudiante',
-                                conversationId: data.conversationId,
-                                type: 'peer'
-                            });
-                        }
                     }
-                } else if (change.type === 'modified') {
+                    eventEmitter.emit('peer-message-update', newMsg);
+                    if (!isInitial) {
+                        eventEmitter.emit('realtime-incoming-message', {
+                            id: msgId,
+                            text: data.text,
+                            senderId: data.senderId,
+                            senderName: data.senderName || 'Estudiante',
+                            conversationId: data.conversationId,
+                            type: 'peer'
+                        });
+                    }
+                }
+            } else if (change.type === 'modified') {
+                if (!isSessionActive) {
                     const idx = (dbMock.studentPeerMessagesData || []).findIndex(m => m.id === msgId);
                     if (idx > -1) {
                         dbMock.studentPeerMessagesData[idx] = { ...dbMock.studentPeerMessagesData[idx], ...data };
                         eventEmitter.emit('peer-message-update', dbMock.studentPeerMessagesData[idx]);
                     }
-                } else if (change.type === 'removed') {
+                }
+            } else if (change.type === 'removed') {
+                if (!isSessionActive) {
                     const idx = (dbMock.studentPeerMessagesData || []).findIndex(m => m.id === msgId);
                     if (idx > -1) {
                         const [removed] = dbMock.studentPeerMessagesData.splice(idx, 1);
                         eventEmitter.emit('peer-message-update', { ...removed, deleted: true } as any);
                     }
                 }
-            });
-        }, (err: any) => handleSyncError('Firestore peer chat sync:', err));
-        }
+            }
+        });
+    }, (err: any) => handleSyncError('Firestore peer chat sync:', err));
+}
 
         // 2. Direct Messages (Student - Teacher / Admin)
         if (currentUserObj?.role === 'admin') {
@@ -382,7 +395,7 @@ export const initFirestoreSync = () => {
                             dbMock.courseGroupMessagesData.push(newMsg);
                         }
                         eventEmitter.emit('course-group-message-update', newMsg);
-                        eventEmitter.emit('group-message-update', newMsg);
+                        eventEmitter.emit('group-message-update', { ...newMsg, courseId: data.courseId });
                         if (!isInitial) {
                             eventEmitter.emit('realtime-incoming-message', {
                                 id: msgId,
@@ -470,8 +483,8 @@ export const initFirestoreSync = () => {
                             unreadByStudent: data.unreadByStudent ?? existing.unreadByStudent,
                         };
                     }
-                    eventEmitter.emit('message-update', { conversationId: convoId });
-                    eventEmitter.emit('direct-message-update', { conversationId: convoId });
+                    eventEmitter.emit('message-update', { conversationId: convoId, ...data });
+                    eventEmitter.emit('direct-message-update', { conversationId: convoId, ...data });
                 } else if (change.type === 'removed') {
                     if (dbMock.conversationsData) {
                         for (let i = dbMock.conversationsData.length - 1; i >= 0; i--) {
@@ -1185,7 +1198,8 @@ export const syncSendPeerMessageToFirestore = async (msg: StudentPeerMessage) =>
 
         // Also sync peer conversation document and unread status
         if (msg.conversationId) {
-            const parts = msg.conversationId.replace('peer_', '').split('_');
+            const resolved = resolveConversationMetadata(msg.conversationId, { type: 'peer' });
+            const parts = resolved.participants;
             const unreadByMap: Record<string, boolean> = {};
             parts.forEach(pId => {
                 unreadByMap[pId] = pId !== msg.senderId;
@@ -1206,15 +1220,17 @@ export const syncSendPeerMessageToFirestore = async (msg: StudentPeerMessage) =>
 
 export const syncRemoveClosedSupportConversationInFirestore = async (conversationId: string, studentId?: string) => {
     try {
-        const cleanConvoId = (conversationId || '').replace(/^direct_/, '');
-        const cleanStudentId = (studentId || '').replace(/^direct_/, '') || cleanConvoId.split('_')[0];
+        const resolved = resolveConversationMetadata(conversationId, { studentId });
+        const cleanConvoId = resolved.normalizedId || (conversationId || '').replace(/^direct_/, '');
+        const cleanStudentId = resolved.studentId || (studentId || '').replace(/^direct_/, '');
         const targetIds = Array.from(new Set([
             conversationId,
             studentId,
             cleanConvoId,
             cleanStudentId,
             `direct_${cleanConvoId}`,
-            `direct_${cleanStudentId}`
+            `direct_${cleanStudentId}`,
+            `support_${cleanStudentId}`
         ].filter(Boolean)));
         await Promise.all(targetIds.map(id => deleteDoc(doc(db, 'firestore_closed_conversations', id as string)).catch(() => {})));
     } catch (e) {
@@ -1298,125 +1314,207 @@ export const syncConversationTeacherInFirestore = async (studentIdOrConvoId: str
 };
 
 export const syncCloseSupportConversationInFirestore = async (conversationId: string, studentId: string, closedBy: string = 'teacher') => {
-    try {
-        const cleanConvoId = (conversationId || '').replace(/^direct_/, '');
-        const cleanStudentId = (studentId || '').replace(/^direct_/, '') || cleanConvoId.split('_')[0];
-
-        const targetIds = Array.from(new Set([
-            conversationId,
-            studentId,
-            cleanConvoId,
-            cleanStudentId,
-            `direct_${cleanConvoId}`,
-            `direct_${cleanStudentId}`
-        ].filter(Boolean)));
-
-        // 1. Delete conversations documents in Firestore
-        const convoDeletePromises: Promise<void>[] = targetIds.map(id => 
-            deleteDoc(doc(db, 'firestore_conversations', id)).catch(() => {})
-        );
-
-        const convosRef = collection(db, 'firestore_conversations');
-        if (cleanStudentId) {
-            const qConvos = query(convosRef, where('studentId', '==', cleanStudentId));
-            const convosSnap = await getDocs(qConvos).catch(() => null);
-            if (convosSnap) {
-                convosSnap.forEach(d => {
-                    convoDeletePromises.push(deleteDoc(doc(db, 'firestore_conversations', d.id)).catch(() => {}));
-                });
-            }
-        }
-        await Promise.all(convoDeletePromises);
-
-        // 2. Delete direct messages documents from Firestore
-        const msgsRef = collection(db, 'firestore_direct_messages');
-        const msgDeletePromises: Promise<void>[] = [];
-
-        for (const tid of targetIds) {
-            const q = query(msgsRef, where('conversationId', '==', tid));
-            const snap = await getDocs(q).catch(() => null);
-            if (snap) {
-                snap.forEach(d => {
-                    msgDeletePromises.push(deleteDoc(doc(db, 'firestore_direct_messages', d.id)).catch(() => {}));
-                });
-            }
-        }
-
-        if (cleanStudentId) {
-            const qSender = query(msgsRef, where('senderId', '==', cleanStudentId));
-            const snapSender = await getDocs(qSender).catch(() => null);
-            if (snapSender) {
-                snapSender.forEach(d => {
-                    msgDeletePromises.push(deleteDoc(doc(db, 'firestore_direct_messages', d.id)).catch(() => {}));
-                });
-            }
-        }
-
-        await Promise.all(msgDeletePromises);
-
-        // 3. Delete tutoring requests from Firestore
-        const tutoringRef = collection(db, 'firestore_tutoring_requests');
-        const tutoringDeletePromises: Promise<void>[] = targetIds.map(id =>
-            deleteDoc(doc(db, 'firestore_tutoring_requests', id)).catch(() => {})
-        );
-        if (cleanStudentId) {
-            const qTutoring = query(tutoringRef, where('studentId', '==', cleanStudentId));
-            const snapTutoring = await getDocs(qTutoring).catch(() => null);
-            if (snapTutoring) {
-                snapTutoring.forEach(d => {
-                    tutoringDeletePromises.push(deleteDoc(doc(db, 'firestore_tutoring_requests', d.id)).catch(() => {}));
-                });
-            }
-        }
-        await Promise.all(tutoringDeletePromises);
-
-        // 4. Delete documents in chats collection if present
-        const chatDeletePromises: Promise<void>[] = targetIds.map(async (id) => {
-            try {
-                const subMsgsSnap = await getDocs(collection(db, 'chats', id, 'messages')).catch(() => null);
-                if (subMsgsSnap) {
-                    await Promise.all(subMsgsSnap.docs.map(d => deleteDoc(d.ref).catch(() => {})));
+    // Increase the timeout ceiling slightly for safety on slow networks, but because it is a Promise.race, 
+    // it will resolve instantly as soon as workPromise finishes (which will be much faster now!).
+    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 3500));
+    
+    const workPromise = (async () => {
+        try {
+            if (closedBy === 'student') {
+                try {
+                    const resolved = resolveConversationMetadata(conversationId, { studentId });
+                    const cleanConvoId = resolved.normalizedId || (conversationId || '').replace(/^direct_/, '').replace(/^support_/, '').replace(/^peer_/, '');
+                    const cleanStudentId = resolved.studentId || (studentId || '').replace(/^direct_/, '').replace(/^support_/, '').replace(/^peer_/, '');
+                    
+                    const payload = {
+                        status: 'resolved',
+                        closed: true,
+                        closedBy: 'student',
+                        closedAt: serverTimestamp(),
+                        updatedAt: serverTimestamp()
+                    };
+                    
+                    // Students only have update permissions for support_* chat documents, not raw IDs
+                    const targetIds = Array.from(new Set([
+                        conversationId,
+                        `support_${cleanConvoId}`,
+                        `support_${cleanStudentId}`
+                    ].filter(Boolean)));
+                    
+                    await Promise.all(targetIds.map(async (id) => {
+                        await safeSetDoc(doc(db, 'firestore_conversations', id), payload, { merge: true }).catch(() => {});
+                        await safeSetDoc(doc(db, 'chats', id), payload, { merge: true }).catch(() => {});
+                    }));
+                } catch (e) {
+                    // Silently ignore student soft-close errors/warnings in client logs
                 }
-                await deleteDoc(doc(db, 'chats', id)).catch(() => {});
-            } catch (err) {}
-        });
-        await Promise.all(chatDeletePromises);
+                return;
+            }
 
-        // 5. Save closed status in firestore_closed_conversations collection so it persists across sessions
-        const closedColRef = collection(db, 'firestore_closed_conversations');
-        const closedPromises: Promise<void>[] = targetIds.map(id =>
-            safeSetDoc(doc(closedColRef, id), {
-                closed: true,
-                closedBy,
-                closedAt: serverTimestamp()
-            }, { merge: true }).catch(() => {})
-        );
-        
-        // 6. Deactivate any active voice call rooms, whiteboard sessions, and WebRTC signaling rooms
-        const voicePromises: Promise<void>[] = targetIds.map(id =>
-            safeSetDoc(doc(db, 'voice_group_calls', id), {
-                active: false,
-                participants: [],
-                updatedAt: serverTimestamp()
-            }, { merge: true }).catch(() => {})
-        );
-        const whiteboardPromises: Promise<void>[] = targetIds.map(id =>
-            safeSetDoc(doc(db, 'whiteboards', id), {
-                active: false,
-                updatedAt: serverTimestamp()
-            }, { merge: true }).catch(() => {})
-        );
-        const signalingPromises: Promise<void>[] = targetIds.map(id =>
-            safeSetDoc(doc(db, 'rooms', `room_${id}`), {
-                status: 'ended',
-                endedAt: serverTimestamp()
-            }, { merge: true }).catch(() => {})
-        );
+            const resolved = resolveConversationMetadata(conversationId, { studentId });
+            const cleanConvoId = resolved.normalizedId || (conversationId || '').replace(/^direct_/, '').replace(/^support_/, '').replace(/^peer_/, '');
+            const cleanStudentId = resolved.studentId || (studentId || '').replace(/^direct_/, '').replace(/^support_/, '').replace(/^peer_/, '');
+            const teacherUid = auth.currentUser?.uid;
 
-        await Promise.all([...closedPromises, ...voicePromises, ...whiteboardPromises, ...signalingPromises]);
-    } catch (e) {
-        console.warn('Failed to close support conversation in Firestore:', e);
-    }
+            // Specific variation IDs only matching this exact active conversation to avoid wide scans
+            const rawTargetIds = [
+                conversationId,
+                `direct_${cleanConvoId}`,
+                `support_${cleanConvoId}`,
+                `peer_${cleanConvoId}`,
+                `support_${cleanStudentId}`,
+                `direct_${cleanStudentId}`,
+                cleanStudentId,
+                cleanConvoId
+            ];
+            
+            if (teacherUid && cleanStudentId) {
+                rawTargetIds.push(`direct_${cleanStudentId}_${teacherUid}`);
+                rawTargetIds.push(`direct_${teacherUid}_${cleanStudentId}`);
+                rawTargetIds.push(`${cleanStudentId}_${teacherUid}`);
+                rawTargetIds.push(`${teacherUid}_${cleanStudentId}`);
+            }
+
+            const targetIds = Array.from(new Set(rawTargetIds.filter(Boolean)));
+
+            const deleteRefs: any[] = [];
+
+            // Add standard target documents directly to the deletion pool (doesn't trigger network calls)
+            targetIds.forEach(id => {
+                deleteRefs.push(doc(db, 'firestore_conversations', id));
+                deleteRefs.push(doc(db, 'firestore_tutoring_requests', id));
+                deleteRefs.push(doc(db, 'firestore_closed_conversations', id));
+                deleteRefs.push(doc(db, 'voice_group_calls', id));
+                deleteRefs.push(doc(db, 'whiteboards', id));
+                deleteRefs.push(doc(db, 'rooms', `room_${id}`));
+                deleteRefs.push(doc(db, 'chats', id));
+            });
+
+            // Parallel fetch pool to execute all queries in a single roundtrip
+            const fetchPromises: Promise<any>[] = [];
+
+            // 1. Query conversations matching cleanStudentId
+            if (cleanStudentId) {
+                const convosRef = collection(db, 'firestore_conversations');
+                fetchPromises.push(
+                    getDocs(query(convosRef, where('studentId', '==', cleanStudentId)))
+                        .then(snap => snap?.docs || [])
+                        .catch(() => [])
+                );
+            }
+
+            // 2. Query direct messages matching conversationId using the 'in' operator (extremely fast, single roundtrip!)
+            const msgsRef = collection(db, 'firestore_direct_messages');
+            if (targetIds.length > 0) {
+                for (let i = 0; i < targetIds.length; i += 10) {
+                    fetchPromises.push(
+                        getDocs(query(msgsRef, where('conversationId', 'in', targetIds.slice(i, i + 10))))
+                            .then(snap => snap?.docs || [])
+                            .catch(() => [])
+                    );
+                }
+            }
+
+            // 3. Query teacher messages matching conversationId using the 'in' operator
+            const teacherMsgsRef = collection(db, 'firestore_teacher_messages');
+            if (targetIds.length > 0) {
+                for (let i = 0; i < targetIds.length; i += 10) {
+                    fetchPromises.push(
+                        getDocs(query(teacherMsgsRef, where('conversationId', 'in', targetIds.slice(i, i + 10))))
+                            .then(snap => snap?.docs || [])
+                            .catch(() => [])
+                    );
+                }
+            }
+
+            // 4. Query tutoring requests matching cleanStudentId
+            if (cleanStudentId) {
+                const tutoringRef = collection(db, 'firestore_tutoring_requests');
+                fetchPromises.push(
+                    getDocs(query(tutoringRef, where('studentId', '==', cleanStudentId)))
+                        .then(snap => snap?.docs || [])
+                        .catch(() => [])
+                );
+            }
+
+            // 5. Query subcollections (messages, WebRTC signaling) for all possible chat ID permutations to guarantee total deletion
+            const chatIdsToFetch = targetIds;
+            chatIdsToFetch.forEach(id => {
+                fetchPromises.push(
+                    getDocs(collection(db, 'chats', id, 'messages'))
+                        .then(snap => snap?.docs || [])
+                        .catch((err) => {
+                            console.error(`[firestoreSync] Error fetching messages for chat ${id}:`, err);
+                            return [];
+                        })
+                );
+                fetchPromises.push(
+                    getDocs(collection(db, 'chats', id, 'signal', 'callData', 'candidates'))
+                        .then(snap => snap?.docs || [])
+                        .catch(() => [])
+                );
+                fetchPromises.push(
+                    getDocs(collection(db, 'chats', id, 'signal'))
+                        .then(snap => snap?.docs || [])
+                        .catch(() => [])
+                );
+            });
+
+            // Resolve all parallel fetch tasks (now max 10 requests, highly performant!)
+            const fetchResults = await Promise.all(fetchPromises);
+
+            // Add fetched document references to deletion pool
+            fetchResults.flat().forEach(docSnap => {
+                if (docSnap && docSnap.ref) {
+                    deleteRefs.push(docSnap.ref);
+                }
+            });
+
+            // Deduplicate the DocumentReferences by their absolute database path
+            const uniquePaths = new Set<string>();
+            const uniqueDeleteRefs: any[] = [];
+            deleteRefs.forEach(ref => {
+                if (ref && ref.path && !uniquePaths.has(ref.path)) {
+                    uniquePaths.add(ref.path);
+                    uniqueDeleteRefs.push(ref);
+                }
+            });
+
+            // Delete subcollections (messages, etc) FIRST, then delete parent documents (chats/id)
+            const subcollectionRefs = uniqueDeleteRefs.filter(ref => ref.path.includes('/messages/') || ref.path.includes('/signal/'));
+            const parentRefs = uniqueDeleteRefs.filter(ref => !subcollectionRefs.includes(ref));
+
+            // Delete subcollections first
+            await Promise.all(subcollectionRefs.map(async (ref) => {
+                try {
+                    await deleteDoc(ref);
+                } catch (err: any) {
+                    if (err?.code === 'permission-denied' || err?.message?.includes('permission')) {
+                        console.warn(`[firestoreSync] No permission to delete subcollection document at path ${ref.path}, skipping`);
+                    } else {
+                        console.warn(`[firestoreSync] Error deleting subcollection document at path ${ref.path}:`, err);
+                    }
+                }
+            }));
+
+            // Delete parent documents
+            await Promise.all(parentRefs.map(async (ref) => {
+                try {
+                    await deleteDoc(ref);
+                } catch (err: any) {
+                    if (err?.code === 'permission-denied' || err?.message?.includes('permission')) {
+                        console.warn(`[firestoreSync] No permission to delete parent document at path ${ref.path}, skipping`);
+                    } else {
+                        console.warn(`[firestoreSync] Error deleting parent document at path ${ref.path}:`, err);
+                    }
+                }
+            }));
+        } catch (e) {
+            console.warn('Failed to completely delete support conversation in Firestore:', e);
+        }
+    })();
+
+    await Promise.race([workPromise, timeoutPromise]);
 };
 
 export const syncMarkPeerConversationAsReadInFirestore = async (conversationId: string, studentId: string) => {

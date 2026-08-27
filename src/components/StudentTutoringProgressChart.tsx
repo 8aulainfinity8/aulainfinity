@@ -21,6 +21,7 @@ import { AuthContext } from '../contexts/AuthContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { eventEmitter } from '../services/eventService';
 import * as api from '../services/api';
+import { auth } from '../services/firebase';
 import { 
     Clock, 
     Calendar, 
@@ -42,6 +43,7 @@ interface StudentTutoringProgressChartProps {
 
 export const StudentTutoringProgressChart: React.FC<StudentTutoringProgressChartProps> = ({ studentId }) => {
     const { theme } = useContext(ThemeContext);
+    const { user } = useContext(AuthContext);
     const isDark = theme === 'dark';
 
     // Interactive goals and controls
@@ -70,6 +72,7 @@ export const StudentTutoringProgressChart: React.FC<StudentTutoringProgressChart
     const { data: tutoringRequests = [], refetch } = useQuery<TutoringRequest[]>({
         queryKey: ['tutoringRequests'],
         queryFn: api.fetchTutoringRequests,
+        enabled: !!user && !!user.id && !!auth.currentUser,
     });
 
     // Filter tutoring requests for current student

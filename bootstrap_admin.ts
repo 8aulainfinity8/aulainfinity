@@ -28,6 +28,11 @@ async function bootstrap() {
     const userRecord = await getAuth().getUserByEmail(email);
     console.log(`User found: ${userRecord.uid}`);
     
+    if (!userRecord.emailVerified) {
+      await getAuth().updateUser(userRecord.uid, { emailVerified: true });
+      console.log(`✅ Email programmatically verified for ${email}`);
+    }
+    
     await getAuth().setCustomUserClaims(userRecord.uid, {
       ...userRecord.customClaims,
       role: 'admin',

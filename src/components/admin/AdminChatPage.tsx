@@ -19,7 +19,7 @@ import { ManageStudentsModal } from './ManageStudentsModal';
 import { db, auth } from '../../services/firebase';
 import { doc, onSnapshot, collection, updateDoc, setDoc, getDocs, writeBatch, deleteDoc } from 'firebase/firestore';
 import { eventEmitter } from '../../services/eventService';
-import { getDirectChatId, resolveUserUid, parseDirectChatId, parseSupportChatId } from '../../utils/chatUtils';
+import { getDirectChatId, resolveUserUid, parseDirectChatId, parseSupportChatId, resolveConversationMetadata } from '../../utils/chatUtils';
 
 // --- SUB-COMPONENTS ---
 
@@ -55,7 +55,8 @@ const ConversationItem: React.FC<{
     }, [conversation.teacherId, conversation.teacherName, isTeacher, user?.id]);
 
     const channelBadge = useMemo(() => {
-        if (conversation.id.includes('_')) {
+        const resolved = resolveConversationMetadata(conversation.id, { cachedData: conversation });
+        if (resolved.type === 'direct') {
             return (
                 <span className="text-[10px] uppercase font-bold tracking-wider bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-200 px-1.5 py-0.5 rounded">
                     Tutoría Directa
@@ -67,7 +68,7 @@ const ConversationItem: React.FC<{
                 Soporte Gral.
             </span>
         );
-    }, [conversation.id]);
+    }, [conversation.id, conversation]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -341,7 +342,7 @@ export const AdminChatPage: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['groupMessages', selectedConversationId] });
             queryClient.invalidateQueries({ queryKey: ['peerMessages', selectedConversationId] });
             queryClient.invalidateQueries({ queryKey: ['teacherMessages', selectedConversationId] });
-            queryClient.invalidateQueries({ queryKey: ['conversations'] });
+            if (user?.id) queryClient.invalidateQueries({ queryKey: ['conversations', user.id] });
             queryClient.invalidateQueries({ queryKey: ['groupConversations'] });
             setShowClearChatModal(false);
         } catch (err) {
@@ -356,15 +357,69 @@ export const AdminChatPage: React.FC = () => {
         try {
             setIsClosingDuda(true);
             const isStudentRole = user?.role === 'student';
-            const studentIdToClose = activeConversation?.studentId || selectedConversationId.replace('direct_', '').split('_')[0];
-            await api.closeSupportConversation(selectedConversationId, studentIdToClose, isStudentRole ? 'student' : (user?.role || 'teacher'));
-            await queryClient.invalidateQueries({ queryKey: ['conversations'] });
-            await queryClient.invalidateQueries({ queryKey: ['messages'] });
+            const resolved = resolveConversationMetadata(selectedConversationId, {
+                cachedData: activeConversation,
+                studentId: activeConversation?.studentId
+            });
+            const studentIdToClose = activeConversation?.studentId || resolved.studentId || selectedConversationId;
+
+            // Optimistic update to immediately clear the conversation from the client cache so it disappears instantly
+            const removeConvoFromCache = (cacheKey: any[]) => {
+                queryClient.setQueryData<any[]>(cacheKey, (old) => {
+                    if (!old || !Array.isArray(old)) return old;
+                    return old.filter((c) => c.id !== selectedConversationId && c.id !== studentIdToClose && c.id !== `support_${studentIdToClose}`);
+                });
+            };
+
+            removeConvoFromCache(['conversations']);
+            if (user?.id) removeConvoFromCache(['conversations', user.id]);
+            if (studentIdToClose) removeConvoFromCache(['conversations', studentIdToClose]);
+
+            // Clear localStorage chat messages cache for all permutations of this student's chat to prevent it from reappearing on selection
+            const cleanConvoId = resolved.normalizedId || selectedConversationId;
+            const cleanSId = studentIdToClose;
+            const teacherUid = user?.id || '';
+            const permutations = [
+                selectedConversationId,
+                cleanConvoId,
+                `direct_${cleanConvoId}`,
+                `support_${cleanConvoId}`,
+                `peer_${cleanConvoId}`,
+                `support_${cleanSId}`,
+                `direct_${cleanSId}`,
+                cleanSId
+            ];
+            if (teacherUid && cleanSId) {
+                permutations.push(`direct_${cleanSId}_${teacherUid}`);
+                permutations.push(`direct_${teacherUid}_${cleanSId}`);
+                permutations.push(`${cleanSId}_${teacherUid}`);
+                permutations.push(`${teacherUid}_${cleanSId}`);
+            }
+            permutations.forEach(p => {
+                if (p) {
+                    localStorage.removeItem(`chat_messages_${p}`);
+                    localStorage.removeItem(`chat_messages_direct_${p}`);
+                }
+            });
+
+            // Execute deletion completely in the background to ensure no visual blocking
+            api.closeSupportConversation(selectedConversationId, studentIdToClose, isStudentRole ? 'student' : (user?.role || 'teacher'))
+                .then(() => {
+                    if (user?.id) queryClient.invalidateQueries({ queryKey: ['conversations', user.id] });
+                    queryClient.invalidateQueries({ queryKey: ['messages'] });
+                })
+                .catch((err) => {
+                    console.error('Background close support conversation error:', err);
+                });
+
+            // Instantly dismiss modal and clean loader status
             setSelectedConversationId(null);
             setShowResolveConfirmModal(false);
+            setIsClosingDuda(false);
         } catch (err) {
-            console.error('Error closing support conversation:', err);
-        } finally {
+            console.error('Error in resolve duda flow:', err);
+            setSelectedConversationId(null);
+            setShowResolveConfirmModal(false);
             setIsClosingDuda(false);
         }
     };
@@ -497,25 +552,55 @@ export const AdminChatPage: React.FC = () => {
 
     // Real-time Firestore event listeners to update UI immediately
     useEffect(() => {
-        const handleDirectMessageUpdate = () => {
-            queryClient.invalidateQueries({ queryKey: ['messages'] });
-            queryClient.invalidateQueries({ queryKey: ['conversations'] });
+        const handleDirectMessageUpdate = (payload: any) => {
+            const convoId = payload?.conversationId || payload?.courseId;
+            if (convoId) {
+                // Actualización granular de mensajes (P5.3)
+                queryClient.setQueryData(['messages', convoId], (old: any[] | undefined) => {
+                    if (!old) return old;
+                    if (old.some(m => m.id === payload.id)) return old;
+                    return [...old, payload];
+                });
+            }
         };
-        const handleTeacherMessageUpdate = () => {
-            queryClient.invalidateQueries({ queryKey: ['teacherMessages'] });
+        const handleTeacherMessageUpdate = (payload: any) => {
+            const convoId = payload?.conversationId || 'sala_profesores_coordinacion';
+            queryClient.setQueryData(['teacherMessages', convoId], (old: any[] | undefined) => {
+                if (!old) return old;
+                if (old.some(m => m.id === payload.id)) return old;
+                return [...old, payload];
+            });
+            // Update the ALL key as well
+            queryClient.setQueryData(['teacherMessages', 'ALL'], (old: any[] | undefined) => {
+                if (!old) return old;
+                if (old.some(m => m.id === payload.id)) return old;
+                return [...old, payload];
+            });
         };
-        const handlePeerMessageUpdate = () => {
-            queryClient.invalidateQueries({ queryKey: ['peerMessages'] });
-            queryClient.invalidateQueries({ queryKey: ['peerConversations'] });
+        const handlePeerMessageUpdate = (payload: any) => {
+            const convoId = payload?.conversationId;
+            if (convoId) {
+                queryClient.setQueryData(['peerMessages', convoId], (old: any[] | undefined) => {
+                    if (!old) return old;
+                    if (old.some(m => m.id === payload.id)) return old;
+                    return [...old, payload];
+                });
+            }
         };
-        const handleGroupMessageUpdate = () => {
-            queryClient.invalidateQueries({ queryKey: ['groupMessages'] });
-            queryClient.invalidateQueries({ queryKey: ['groupConversations'] });
+        const handleGroupMessageUpdate = (payload: any) => {
+            const convoId = payload?.courseId || payload?.conversationId;
+            if (convoId) {
+                queryClient.setQueryData(['groupMessages', convoId], (old: any[] | undefined) => {
+                    if (!old) return old;
+                    if (old.some(m => m.id === payload.id)) return old;
+                    return [...old, payload];
+                });
+            }
         };
         const handleUserUpdate = () => {
             queryClient.invalidateQueries({ queryKey: ['users'] });
             queryClient.invalidateQueries({ queryKey: ['teachers'] });
-            queryClient.invalidateQueries({ queryKey: ['conversations'] });
+            if (user?.id) queryClient.invalidateQueries({ queryKey: ['conversations', user.id] });
             queryClient.invalidateQueries({ queryKey: ['peerConversations'] });
         };
 
@@ -546,10 +631,10 @@ export const AdminChatPage: React.FC = () => {
         const convo = conversations?.find(c => c.id === boardId);
         if (convo) return `Tutoría Privada: ${convo.studentName}`;
 
-        if (boardId.startsWith('peer_')) {
-            const parts = boardId.replace('peer_', '').split('_');
-            const student1 = getUserName(parts[0]);
-            const student2 = getUserName(parts[1] || '');
+        const resolved = resolveConversationMetadata(boardId);
+        if (resolved.type === 'peer' && resolved.participants.length >= 2) {
+            const student1 = getUserName(resolved.participants[0]);
+            const student2 = getUserName(resolved.participants[1] || '');
             return `Chat Alumnos: ${student1} ↔ ${student2}`;
         }
 
@@ -631,7 +716,8 @@ export const AdminChatPage: React.FC = () => {
     // Fetch teachers list for routing assignments
     const { data: teachers } = useQuery({
         queryKey: ['teachers'],
-        queryFn: api.fetchTeachers
+        queryFn: api.fetchTeachers,
+        enabled: !!user && !!user.id && !!auth.currentUser
     });
 
     // Filter conversations for teachers: show conversations of students assigned to this teacher or unassigned
@@ -704,10 +790,13 @@ export const AdminChatPage: React.FC = () => {
                     if (s.assignedTeacherId === teacherUid || s.assignedTeacherId === user?.id) return true;
                     if (s.assignedTeacherName && user?.name && s.assignedTeacherName.toLowerCase() === user.name.toLowerCase()) return true;
                     const directConvoId = getDirectChatId(studentUid, teacherUid);
+                    const supportConvoId = `support_${studentUid}`;
                     const hasTeacherConvo = (conversations || []).some(c => {
                         if (!c || !c.id) return false;
                         return (
                             c.id === directConvoId ||
+                            c.id === supportConvoId ||
+                            c.id === studentUid ||
                             c.id === `${studentUid}_${teacherUid}` ||
                             (c.studentId === studentUid && (c.teacherId === teacherUid || c.id.includes(teacherUid)))
                         );
@@ -718,26 +807,18 @@ export const AdminChatPage: React.FC = () => {
 
             return assignedStudents.map(student => {
                 const studentUid = resolveUserUid(student);
-                const defaultConvoId = isTeacher && teacherUid ? getDirectChatId(studentUid, teacherUid) : studentUid;
-                const canonicalId = isTeacher && teacherUid ? getDirectChatId(studentUid, teacherUid) : studentUid;
-                const legacyId = isTeacher && teacherUid ? `${studentUid}_${teacherUid}` : studentUid;
+                const canonicalId = `support_${studentUid}`;
 
                 const existingConvo = (conversations || []).find(c => {
                     if (!c || !c.id) return false;
-                    if (isTeacher && teacherUid) {
-                        return (
-                            c.id === canonicalId ||
-                            c.id === legacyId ||
-                            (c.studentId === studentUid && (c.teacherId === teacherUid || c.id.includes(teacherUid)))
-                        );
-                    } else {
-                        const cleanCId = c.id.replace(/^direct_/, '');
-                        return (
-                            cleanCId === studentUid ||
-                            c.studentId === studentUid ||
-                            cleanCId.startsWith(`${studentUid}_`)
-                        );
-                    }
+                    return (
+                        c.id === canonicalId ||
+                        c.id === studentUid ||
+                        c.studentId === studentUid ||
+                        c.id.replace(/^support_/, '') === studentUid ||
+                        c.id.replace(/^direct_/, '') === studentUid ||
+                        c.id.startsWith(`${studentUid}_`)
+                    );
                 });
 
                 const finalConvoId = canonicalId;
@@ -803,19 +884,9 @@ export const AdminChatPage: React.FC = () => {
             if (location.state?.activeChatType) {
                 setActiveTab(location.state.activeChatType);
             }
-            if (isTeacher && user?.id) {
-                const teacherUid = resolveUserUid(user);
-                const studentUid = resolveUserUid(studentQueryId);
-                const canonicalId = getDirectChatId(studentUid, teacherUid);
-                setSelectedConversationId(canonicalId);
-            } else {
-                const targetConvo = sortedConversations.find(c => c.studentId === studentQueryId || c.id === studentQueryId || c.id.includes(studentQueryId));
-                if (targetConvo) {
-                    setSelectedConversationId(targetConvo.id);
-                } else {
-                    setSelectedConversationId(studentQueryId);
-                }
-            }
+            const studentUid = resolveUserUid(studentQueryId);
+            const canonicalId = `support_${studentUid}`;
+            setSelectedConversationId(canonicalId);
             setSearchParams({}, { replace: true });
         }
     }, [studentQueryId, setSearchParams, sortedConversations, location.state, isTeacher, user]);
@@ -829,10 +900,11 @@ export const AdminChatPage: React.FC = () => {
             const convo = conversations?.find(c => c.id === selectedConversationId);
             if (convo) return convo;
 
-            const student = (allUsers || []).find(u => u.id === selectedConversationId || selectedConversationId?.includes(u.id));
+            const cleanStudentId = selectedConversationId?.replace(/^support_/, '').replace(/^direct_/, '').split('_')[0];
+            const student = (allUsers || []).find(u => u.id === selectedConversationId || u.id === cleanStudentId || selectedConversationId?.includes(u.id));
             if (student) {
                 return {
-                    id: selectedConversationId || student.id,
+                    id: selectedConversationId || `support_${student.id}`,
                     studentId: student.id,
                     studentName: student.name,
                     studentEmail: student.email + (student.assignedTeacherName ? ` • Tutor: ${student.assignedTeacherName}` : ''),
@@ -883,28 +955,39 @@ export const AdminChatPage: React.FC = () => {
     }, [conversations, groupConversations, peerConversations, selectedConversationId, activeTab, allUsers, teachers, sortedConversations]);
 
     const rawEffectiveConvoId = activeConversation?.id || selectedConversationId;
-    const effectiveConvoId = rawEffectiveConvoId && !rawEffectiveConvoId.includes('_') && !rawEffectiveConvoId.startsWith('support_') && !rawEffectiveConvoId.startsWith('group_') && !rawEffectiveConvoId.startsWith('sala_') && !rawEffectiveConvoId.startsWith('teacher_') && !rawEffectiveConvoId.startsWith('peer_') ? `support_${rawEffectiveConvoId}` : rawEffectiveConvoId;
-    
-    const parsedFromId = effectiveConvoId && effectiveConvoId.startsWith('direct_') ? parseDirectChatId(effectiveConvoId) : null;
-    const parsedSupport = effectiveConvoId && effectiveConvoId.startsWith('support_') ? parseSupportChatId(effectiveConvoId) : null;
-    const targetStudentId = activeConversation?.studentId || parsedFromId?.studentId || parsedSupport?.studentId || (effectiveConvoId && !effectiveConvoId.startsWith('support_') && !effectiveConvoId.startsWith('group_') && !effectiveConvoId.startsWith('sala_') && !effectiveConvoId.startsWith('teacher_') && !effectiveConvoId.includes('_') ? effectiveConvoId : undefined);
-    const targetTeacherId = isTeacher && user?.id ? resolveUserUid(user) : (activeConversation?.teacherId || parsedFromId?.teacherId || undefined);
-    const directParticipants = targetStudentId && targetTeacherId ? [targetStudentId, targetTeacherId] : undefined;
-    const supportParticipants = targetStudentId ? [targetStudentId] : undefined;
-    const chatParticipants = effectiveConvoId?.startsWith('support_') ? supportParticipants : directParticipants;
+    const activeConvoStudentId = activeConversation?.studentId;
+    const activeConvoTeacherId = activeConversation?.teacherId;
+    const activeConvoType = activeConversation?.type;
+    const currentUserId = user?.id;
+
+    const resolvedMeta = useMemo(() => {
+        return resolveConversationMetadata(rawEffectiveConvoId, {
+            cachedData: activeConversation,
+            studentId: activeConvoStudentId,
+            teacherId: isTeacher && currentUserId ? resolveUserUid(user) : activeConvoTeacherId,
+            type: activeConvoType
+        });
+    }, [rawEffectiveConvoId, activeConvoStudentId, activeConvoTeacherId, activeConvoType, isTeacher, currentUserId]);
+
+    const effectiveConvoId = resolvedMeta.normalizedId || rawEffectiveConvoId;
+    const targetStudentId = resolvedMeta.studentId || undefined;
+    const targetTeacherId = resolvedMeta.teacherId || (isTeacher && currentUserId ? resolveUserUid(user) : undefined);
+    const participantsKey = resolvedMeta.participants.join(',');
 
     const chatOptions = useMemo(() => {
-        const directParts = targetStudentId && targetTeacherId ? [targetStudentId, targetTeacherId] : undefined;
-        const supportParts = targetStudentId ? [targetStudentId] : undefined;
-        const parts = effectiveConvoId?.startsWith('support_') ? supportParts : directParts;
         return {
-            studentId: targetStudentId || undefined,
-            teacherId: targetTeacherId || undefined,
-            participants: parts
+            studentId: targetStudentId,
+            teacherId: targetTeacherId,
+            participants: resolvedMeta.participants.length > 0 ? resolvedMeta.participants : undefined
         };
-    }, [effectiveConvoId, targetStudentId, targetTeacherId]);
+    }, [targetStudentId, targetTeacherId, participantsKey]);
 
-    console.log(`[F110.30] [USECHAT_CALL] | timestamp: ${performance.now()} | effectiveConvoId: ${effectiveConvoId} | selectedConversationId: ${selectedConversationId}`);
+    useEffect(() => {
+        if (effectiveConvoId) {
+            console.log(`[F110.30] [USECHAT_CALL] | timestamp: ${performance.now()} | effectiveConvoId: ${effectiveConvoId} | selectedConversationId: ${selectedConversationId}`);
+        }
+    }, [effectiveConvoId, selectedConversationId]);
+
     const { messages: unifiedMessages, loading: loadingUnifiedMessages, sendMessage, markAsRead, editMessage, deleteMessage, listenerReady } = useChat(
         effectiveConvoId, 
         user?.id || null,
@@ -934,65 +1017,36 @@ export const AdminChatPage: React.FC = () => {
 
     // --- MUTACIONES PARA CHATS ---
     const editMessageMutation = useMutation({
-        mutationFn: ({ messageId, text }: { messageId: string, text: string }) => api.editMessage(messageId, text),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['messages', selectedConversationId] });
-            queryClient.invalidateQueries({ queryKey: ['conversations'] });
-        }
+        mutationFn: ({ messageId, text }: { messageId: string, text: string }) => api.editMessage(messageId, text)
     });
 
     const deleteMessageMutation = useMutation({
-        mutationFn: (messageId: string) => api.deleteMessage(messageId),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['messages', selectedConversationId] });
-            queryClient.invalidateQueries({ queryKey: ['conversations'] });
-        }
+        mutationFn: (messageId: string) => api.deleteMessage(messageId)
     });
 
     const editPeerMessageMutation = useMutation({
-        mutationFn: ({ messageId, text }: { messageId: string, text: string }) => api.editPeerMessage(messageId, text),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['peerMessages', selectedConversationId] });
-            queryClient.invalidateQueries({ queryKey: ['peerConversations'] });
-        }
+        mutationFn: ({ messageId, text }: { messageId: string, text: string }) => api.editPeerMessage(messageId, text)
     });
 
     const deletePeerMessageMutation = useMutation({
-        mutationFn: (messageId: string) => api.deletePeerMessage(messageId),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['peerMessages', selectedConversationId] });
-            queryClient.invalidateQueries({ queryKey: ['peerConversations'] });
-        }
+        mutationFn: (messageId: string) => api.deletePeerMessage(messageId)
     });
 
     const editTeacherMessageMutation = useMutation({
-        mutationFn: ({ messageId, text }: { messageId: string, text: string }) => api.editTeacherMessage(messageId, text),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['teacherMessages'] });
-        }
+        mutationFn: ({ messageId, text }: { messageId: string, text: string }) => api.editTeacherMessage(messageId, text)
     });
 
     const deleteTeacherMessageMutation = useMutation({
-        mutationFn: (messageId: string) => api.deleteTeacherMessage(messageId),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['teacherMessages'] });
-        }
+        mutationFn: (messageId: string) => api.deleteTeacherMessage(messageId)
     });
 
     const assignMutation = useMutation({
         mutationFn: ({ tId }: { tId: string | null }) => 
-            api.assignConversationTeacher(selectedConversationId!, tId),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['conversations'] });
-            queryClient.invalidateQueries({ queryKey: ['messages', selectedConversationId] });
-        }
+            api.assignConversationTeacher(selectedConversationId!, tId)
     });
     
     const markAsReadMutation = useMutation({
-        mutationFn: (conversationId: string) => api.markConversationAsRead(conversationId, isTeacher ? 'teacher' : 'admin'),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['conversations'] });
-        }
+        mutationFn: (conversationId: string) => api.markConversationAsRead(conversationId, isTeacher ? 'teacher' : 'admin')
     });
 
 
@@ -1052,7 +1106,7 @@ export const AdminChatPage: React.FC = () => {
             await sendMessage(
                 input.trim(), 
                 'text', 
-                directParticipants, 
+                chatOptions.participants, 
                 attachments, 
                 isTeacher ? 'teacher' : 'admin'
             );
@@ -1061,7 +1115,6 @@ export const AdminChatPage: React.FC = () => {
             if (textareaRef.current) {
                 textareaRef.current.style.height = 'auto';
             }
-            queryClient.invalidateQueries({ queryKey: ['conversations'] });
         } catch (error) {
             console.error("Failed to send message", error);
         } finally {
@@ -1070,11 +1123,10 @@ export const AdminChatPage: React.FC = () => {
     };
 
     useEffect(() => {
-        if (selectedConversationId && activeMessages.length > 0) {
+        if (selectedConversationId) {
             markAsRead();
-            queryClient.invalidateQueries({ queryKey: ['conversations'] });
         }
-    }, [selectedConversationId, activeMessages.length, markAsRead, queryClient]);
+    }, [selectedConversationId, markAsRead]);
 
     const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         setInput(e.target.value);

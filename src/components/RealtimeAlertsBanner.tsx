@@ -8,6 +8,7 @@ import { db, auth } from '../services/firebase';
 import { listenerTracker } from '../services/listenerTracker';
 import { useAuthorization } from '../hooks/useAuthorization';
 import { getTeacherAssignedLevels } from '../utils/teacherPermissions';
+import { resolveConversationMetadata } from '../utils/chatUtils';
 import * as dbMock from '../services/mockDatabase';
 
 interface RealtimeAlert {
@@ -128,9 +129,10 @@ export const RealtimeAlertsBanner: React.FC = () => {
         if (!user || !roomId) return false;
 
         // 1. If it's a private student-to-student peer chat or student study group:
-        if (roomId.startsWith('peer_') || roomId.startsWith('studygroup_')) {
-            // A user (student, teacher, or admin) is ONLY part of it if their user.id is in the roomId
-            return roomId.includes(user.id);
+        const resolved = resolveConversationMetadata(roomId);
+        if (resolved.type === 'peer' || roomId.startsWith('studygroup_')) {
+            // A user (student, teacher, or admin) is ONLY part of it if their user.id is in the roomId / participants
+            return resolved.participants.includes(user.id) || roomId.includes(user.id);
         }
 
         // 2. For teachers/admins:

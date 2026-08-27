@@ -268,6 +268,7 @@ service cloud.firestore {
       );
       allow delete: if isVerifiedUser() && (
         isAdmin() ||
+        isTeacher() ||
         (resource.data != null && resource.data.studentId == request.auth.uid && resource.data.status == 'pending')
       );
     }
@@ -301,6 +302,7 @@ service cloud.firestore {
       function isChatParticipant() {
         return isVerifiedUser() && (
           isAdmin() ||
+          isTeacher() ||
           isDirectChatIdForUser(chatId) ||
           isPeerChatIdForUser(chatId) ||
           isSupportChatForStudent(chatId) ||
@@ -317,8 +319,18 @@ service cloud.firestore {
         );
       }
 
-      // Lectura: solo participantes legítimos o admin
-      allow get, list: if isChatParticipant();
+      // Lectura individual de documento chat (get)
+      allow get: if isChatParticipant();
+
+      // Lectura en lista / consultas sobre /chats (list)
+      // Debe alinearse exactamente con las clausulas where de las queries (p.ej. participants array-contains userId)
+      allow list: if isSignedIn() && (
+        isAdmin() ||
+        (request.auth.uid in resource.data.participants) ||
+        (resource.data.participantIds is list && request.auth.uid in resource.data.participantIds) ||
+        (resource.data.studentId is string && resource.data.studentId == request.auth.uid) ||
+        (resource.data.teacherId is string && resource.data.teacherId == request.auth.uid)
+      );
 
       // Creación: exige creador verificado, chatId canónico y pertenencia a participants
       allow create: if isVerifiedUser() && (
@@ -351,8 +363,8 @@ service cloud.firestore {
         )
       );
 
-      // Borrado: exclusivo para administradores
-      allow delete: if isAdmin();
+      // Borrado: administradores o profesores aprobados resolviendo dudas (los alumnos no pueden borrar)
+      allow delete: if isAdmin() || isApprovedTeacher();
 
       // Subcolección de mensajes con validación de autoría estricta
       match /messages/{messageId} {
@@ -407,10 +419,21 @@ service cloud.firestore {
           )
         );
 
-        // Borrado de mensaje: solo el autor original (o admin)
+        // Borrado de mensaje: autor original, administrador o participante del chat (para limpiar el chat al resolver la duda)
         allow delete: if isVerifiedUser() && (
           isAdmin() ||
-          resource.data.senderId == request.auth.uid
+          resource.data.senderId == request.auth.uid ||
+          isChatParticipant() ||
+          isDirectChatIdForUser(chatId) ||
+          isPeerChatIdForUser(chatId) ||
+          isSupportChatForStudent(chatId) ||
+          isSupportChatForApprovedTeacher(chatId) ||
+          isTeacherCoordinationChat(chatId) ||
+          isEnrolledInCourse(chatId) ||
+          isTeacherOfCourse(chatId) ||
+          (exists(/databases/$(database)/documents/chats/$(chatId)) &&
+           get(/databases/$(database)/documents/chats/$(chatId)).data.get('participants', []) is list &&
+           request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.get('participants', []))
         );
       }
 
@@ -727,18 +750,22 @@ service cloud.firestore {
     }
 
     match /firestore_conversations/{convId} {
-      allow read, create, delete: if isVerifiedUser() && (
+      allow read, create: if isVerifiedUser() && (
         isAdmin() ||
+        isTeacher() ||
         isDirectChatIdForUser(convId) ||
         isSupportChatForStudent(convId) ||
-        (isSupportChatId(convId) && isApprovedTeacher()) ||
         isParticipant(resource.data)
+      );
+      allow delete: if isVerifiedUser() && (
+        isAdmin() ||
+        isApprovedTeacher()
       );
       allow update: if isVerifiedUser() && (
         isAdmin() ||
+        isTeacher() ||
         isDirectChatIdForUser(convId) ||
         isSupportChatForStudent(convId) ||
-        (isSupportChatId(convId) && isApprovedTeacher()) ||
         isParticipant(resource.data)
       ) && (
         (!('lastMessageTimestamp' in request.resource.data) || request.resource.data.lastMessageTimestamp <= request.time) &&
@@ -747,9 +774,9 @@ service cloud.firestore {
       match /{allSubcollections=**} {
         allow read, write: if isVerifiedUser() && (
           isAdmin() ||
+          isTeacher() ||
           isDirectChatIdForUser(convId) ||
           isSupportChatForStudent(convId) ||
-          (isSupportChatId(convId) && isApprovedTeacher()) ||
           isParticipant(resource.data)
         );
       }
@@ -769,6 +796,7 @@ service cloud.firestore {
       );
       allow delete: if isVerifiedUser() && (
         isAdmin() ||
+        isTeacher() ||
         (resource != null && resource.data.senderId == request.auth.uid)
       );
     }
@@ -842,7 +870,7 @@ service cloud.firestore {
         msgId == 'teacher_' + request.auth.uid ||
         isParticipant(resource.data)
       ));
-      allow delete: if isAdmin() || (isApprovedTeacher() && (resource != null && resource.data.senderId == request.auth.uid));
+      allow delete: if isAdmin() || isTeacher() || (resource != null && resource.data.senderId == request.auth.uid);
     }
 
     // 6. Comments, Ratings, Transactions
@@ -923,7 +951,7 @@ match /firestore_course_messages/{msgId} {
     }
 
     match /firestore_closed_conversations/{convId} {
-       allow read, write: if isApprovedTeacher() || isAdmin();
+       allow read, write: if isTeacher() || isAdmin();
     }
 
     // 7. Student Data & Logs
@@ -990,11 +1018,13 @@ match /firestore_course_messages/{msgId} {
     }
 
     match /whatsapp_queue/{msgId} {
-      allow read, write: if isVerifiedUser();
+      allow read: if isAdmin();
+      allow write: if false;
     }
 
     match /whatsapp_logs/{logId} {
-      allow read, write: if isVerifiedUser();
+      allow read: if isAdmin();
+      allow write: if false;
     }
 
     match /tests/{testId} {

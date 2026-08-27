@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import * as api from '../services/api';
 import { NewCommentsContext } from './NewCommentsContext';
 import { AuthContext } from './AuthContext';
+import { auth } from '../services/firebase';
 import { Comment } from '../types';
 import { eventEmitter } from '../services/eventService';
 
@@ -15,7 +16,7 @@ export const NewCommentsProvider: React.FC<{ children: ReactNode }> = ({ childre
   const { data: comments, isLoading, isError, refetch } = useQuery<Comment[]>({
     queryKey: ['allComments'],
     queryFn: api.fetchAllComments,
-    enabled: user?.role === 'admin',
+    enabled: !!user && !!user.id && !!auth.currentUser && user?.role === 'admin',
   });
 
   // Listen for real-time comment updates instead of polling

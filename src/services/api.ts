@@ -722,9 +722,15 @@ export const fetchUsers = async (): Promise<StudentUser[]> => {
         try {
             const usersRef = collection(db, 'users');
             const studentsRef = collection(db, 'students');
-            const [usersSnap, studentsSnap] = await Promise.all([
-                getDocs(query(usersRef, where('role', '==', 'student'))).catch(() => null),
-                getDocs(studentsRef).catch(() => null)
+            const timeout = new Promise<[any, any]>((_, reject) => 
+                setTimeout(() => reject(new Error('Firestore fetchUsers timeout')), 8000)
+            );
+            const [usersSnap, studentsSnap] = await Promise.race([
+                Promise.all([
+                    getDocs(query(usersRef, where('role', '==', 'student'))).catch(() => null),
+                    getDocs(studentsRef).catch(() => null)
+                ]),
+                timeout
             ]);
 
             const fetchedStudents: StudentUser[] = [];
@@ -760,10 +766,10 @@ export const fetchUsers = async (): Promise<StudentUser[]> => {
             };
 
             if (usersSnap && !usersSnap.empty) {
-                usersSnap.docs.forEach(docSnap => addOrUpdateStudent(docSnap.data(), docSnap.id));
+                usersSnap.docs.forEach((docSnap: any) => addOrUpdateStudent(docSnap.data(), docSnap.id));
             }
             if (studentsSnap && !studentsSnap.empty) {
-                studentsSnap.docs.forEach(docSnap => addOrUpdateStudent(docSnap.data(), docSnap.id));
+                studentsSnap.docs.forEach((docSnap: any) => addOrUpdateStudent(docSnap.data(), docSnap.id));
             }
 
             if (usersSnap || studentsSnap) {
@@ -1623,6 +1629,170 @@ export const fetchConversations = async (): Promise<Conversation[]> => {
     return dbMock.dbFetchConversations();
 };
 
+/**
+ * FASE 3B: Capa canónica de lectura de listados y metadata desde /chats en Firestore.
+ * Lee directamente de la colección canónica /chats aplicando aislamiento estricto
+ * por usuario ('participants array-contains userId').
+ */
+export const fetchUserChatsFromFirestore = async (userId: string): Promise<Conversation[]> => {
+    if (!userId) return [];
+    try {
+        const chatsRef = collection(db, 'chats');
+        const q = query(chatsRef, where('participants', 'array-contains', userId));
+        const snapshot = await getDocs(q);
+        
+        console.log(`[fetchUserChatsFromFirestore] CANONICAL /chats SUCCESS: Loaded ${snapshot.docs.length} chats for userId=${userId}`);
+
+        return snapshot.docs.map(docSnap => {
+            const data = docSnap.data();
+            const chatId = docSnap.id;
+            const unreadMap = data.unreadCount || {};
+            const userUnread = (unreadMap[userId] || 0) > 0;
+            const isSupport = chatId.startsWith('support_') || data.type === 'support';
+            
+            const studentId = data.studentId || (isSupport ? chatId.replace('support_', '') : chatId.replace(/^direct_/, '').split('_')[0]) || userId;
+            const teacherId = data.teacherId || (chatId.startsWith('direct_') ? chatId.replace('direct_', '').split('_')[1] : undefined);
+            const msgText = data.lastMessage || data.lastMessageText || '';
+            const msgTime = data.lastMessageTimestamp?.toDate 
+                ? data.lastMessageTimestamp.toDate().toISOString() 
+                : (typeof data.lastMessageTimestamp === 'string' ? data.lastMessageTimestamp : new Date().toISOString());
+
+            const userUnreadCount = unreadMap[userId] || 0;
+            const isCallerAdmin = userId === 'admin' || userId.startsWith('admin');
+            const isCallerStudent = studentId === userId;
+            const isCallerTeacher = teacherId === userId;
+
+            // unreadByAdmin logic
+            let unreadByAdmin = false;
+            if (data.unreadByAdmin !== undefined) {
+                unreadByAdmin = Boolean(data.unreadByAdmin);
+                if (isCallerAdmin && unreadMap[userId] !== undefined) {
+                    unreadByAdmin = unreadByAdmin && userUnreadCount > 0;
+                }
+            } else {
+                unreadByAdmin = isCallerAdmin ? userUnreadCount > 0 : Object.entries(unreadMap).some(([k, v]) => (k === 'admin' || k.startsWith('admin')) && (v as number) > 0);
+            }
+
+            // unreadByStudent logic
+            let unreadByStudent = false;
+            if (data.unreadByStudent !== undefined) {
+                unreadByStudent = Boolean(data.unreadByStudent);
+                if (isCallerStudent && unreadMap[userId] !== undefined) {
+                    unreadByStudent = unreadByStudent && userUnreadCount > 0;
+                }
+            } else {
+                unreadByStudent = isCallerStudent ? userUnreadCount > 0 : (studentId ? (unreadMap[studentId] || 0) > 0 : false);
+            }
+
+            // unreadByTeacher logic
+            let unreadByTeacher = false;
+            if (data.unreadByTeacher !== undefined) {
+                unreadByTeacher = Boolean(data.unreadByTeacher);
+                if (isCallerTeacher && unreadMap[userId] !== undefined) {
+                    unreadByTeacher = unreadByTeacher && userUnreadCount > 0;
+                }
+            } else {
+                unreadByTeacher = isCallerTeacher ? userUnreadCount > 0 : (teacherId ? (unreadMap[teacherId] || 0) > 0 : false);
+            }
+
+            return {
+                id: chatId,
+                type: data.type || (chatId.startsWith('support_') ? 'support' : chatId.startsWith('direct_') ? 'direct' : chatId.startsWith('peer_') ? 'peer' : 'support'),
+                studentId,
+                studentName: data.studentName || 'Alumno',
+                teacherId,
+                teacherName: data.teacherName,
+                lastMessageText: msgText,
+                lastMessageTimestamp: msgTime,
+                unreadByStudent,
+                unreadByTeacher,
+                unreadByAdmin
+            };
+        });
+    } catch (err: any) {
+        const isPermissionDenied = err?.code === 'permission-denied' || err?.message?.includes('insufficient permissions');
+        if (isPermissionDenied) {
+            console.error('[fetchUserChatsFromFirestore] CANONICAL /chats PERMISSION_DENIED:', {
+                collection: '/chats',
+                operation: 'list (where participants array-contains userId)',
+                userId,
+                authUid: auth?.currentUser?.uid || null,
+                errorMessage: err?.message || String(err)
+            });
+        } else {
+            console.error('[fetchUserChatsFromFirestore] CANONICAL /chats OTHER_ERROR:', {
+                collection: '/chats',
+                operation: 'list (where participants array-contains userId)',
+                userId,
+                authUid: auth?.currentUser?.uid || null,
+                errorMessage: err?.message || String(err)
+            });
+        }
+        console.warn('[fetchUserChatsFromFirestore] Falling back to dbMock:', err);
+        return dbMock.dbFetchConversations().filter(c => c.studentId === userId || c.teacherId === userId || c.id.includes(userId) || userId === 'admin' || userId.startsWith('admin'));
+    }
+};
+
+/**
+ * FASE 3C: Capa canónica de lectura de listados P2P desde /chats en Firestore.
+ * Lee directamente de la colección canónica /chats aplicando aislamiento estricto
+ * por usuario ('participants array-contains studentId') y tipo ('type == peer').
+ */
+export const fetchUserPeerChatsFromFirestore = async (studentId: string): Promise<StudentPeerConversation[]> => {
+    if (!studentId) return [];
+    try {
+        const chatsRef = collection(db, 'chats');
+        const q = query(
+            chatsRef,
+            where('participants', 'array-contains', studentId),
+            where('type', '==', 'peer')
+        );
+        const snapshot = await getDocs(q);
+        
+        return snapshot.docs.map(docSnap => {
+            const data = docSnap.data();
+            const chatId = docSnap.id;
+            
+            let participantIds: string[] = Array.isArray(data.participants) 
+                ? data.participants 
+                : (Array.isArray(data.participantIds) ? data.participantIds : []);
+            if (participantIds.length === 0 && chatId.startsWith('peer_')) {
+                participantIds = chatId.replace('peer_', '').split('_');
+            }
+            
+            const lastMessageText = data.lastMessage || data.lastMessageText || '';
+            let lastMessageTimestamp = new Date().toISOString();
+            if (data.lastMessageTimestamp?.toDate) {
+                lastMessageTimestamp = data.lastMessageTimestamp.toDate().toISOString();
+            } else if (typeof data.lastMessageTimestamp === 'string') {
+                lastMessageTimestamp = data.lastMessageTimestamp;
+            } else if (typeof data.lastMessageTimestamp === 'number') {
+                lastMessageTimestamp = new Date(data.lastMessageTimestamp).toISOString();
+            }
+            
+            const unreadByStudentId: { [sId: string]: boolean } = {};
+            if (data.unreadCount && typeof data.unreadCount === 'object') {
+                Object.keys(data.unreadCount).forEach(uid => {
+                    unreadByStudentId[uid] = (data.unreadCount[uid] || 0) > 0;
+                });
+            } else if (data.unreadByStudentId && typeof data.unreadByStudentId === 'object') {
+                Object.assign(unreadByStudentId, data.unreadByStudentId);
+            }
+            
+            return {
+                id: chatId,
+                participantIds,
+                lastMessageText,
+                lastMessageTimestamp,
+                unreadByStudentId
+            };
+        });
+    } catch (err) {
+        console.warn('[fetchUserPeerChatsFromFirestore] Falling back to dbMock:', err);
+        return dbMock.dbFetchPeerConversations(studentId);
+    }
+};
+
 export const fetchMessages = async (conversationId: string): Promise<DirectMessage[]> => {
     return dbMock.dbFetchMessages(conversationId);
 };
@@ -1659,8 +1829,13 @@ export const markConversationAsRead = async (conversationId: string, role?: stri
 };
 
 export const closeSupportConversation = async (conversationId: string, studentId: string, closedBy: string = 'teacher') => {
-    dbMock.dbCloseSupportConversation(conversationId, studentId, closedBy);
-    syncCloseSupportConversationInFirestore(conversationId, studentId, closedBy).catch(console.error);
+    dbMock.dbCloseSupportConversation(conversationId, studentId, closedBy, false);
+    await syncCloseSupportConversationInFirestore(conversationId, studentId, closedBy).catch(console.error);
+    
+    // Emit events AFTER Firestore sync is completed successfully to prevent any race condition or old data refetch
+    dbMock.eventEmitter.emit('message-update', { conversationId, closed: true });
+    dbMock.eventEmitter.emit('direct-message-update', { conversationId, closed: true });
+    dbMock.eventEmitter.emit('tutoring-request-update', { conversationId, closed: true });
 };
 
 export const assignConversationTeacher = async (conversationId: string, teacherId: string | null): Promise<Conversation> => {
@@ -1860,42 +2035,6 @@ export const sendWhatsApp = async (data: {
     greenapiApiTokenInstance?: string;
     greenapiApiUrl?: string;
 }): Promise<{ success: boolean; simulated?: boolean; message?: string; sid?: string; error?: string }> => {
-    // --- INTEGRACIÓN NATICA CON FIREBASE FIRESTORE QUEUE ---
-    if (data.whatsappMode === 'firebase_queue') {
-        try {
-            const queueRef = collection(db, 'whatsapp_queue');
-            const docRef = await addDoc(queueRef, {
-                to: data.to,
-                body: data.message,
-                message: data.message,
-                status: 'pending',
-                createdAt: new Date().toISOString(),
-                provider: 'firebase_extension_or_trigger'
-            });
-            
-            // También lo registramos en el historial whatsapp_logs
-            const logsRef = collection(db, 'whatsapp_logs');
-            await addDoc(logsRef, {
-                to: data.to,
-                message: data.message,
-                mode: 'firebase_queue',
-                success: true,
-                sid: docRef.id,
-                timestamp: new Date().toISOString()
-            });
-
-            return {
-                success: true,
-                simulated: false,
-                message: `🔥 Integrado con Firebase: Mensaje registrado con ID [${docRef.id}] en la colección 'whatsapp_queue' de Firestore. Listo para ser disparado por Extensiones o Triggers de Firebase.`,
-                sid: docRef.id
-            };
-        } catch (firebaseErr: any) {
-            console.error("Error writing to whatsapp_queue in Firestore:", firebaseErr);
-            return { success: false, error: `Error al escribir en Firebase Firestore ('whatsapp_queue'): ${firebaseErr.message}` };
-        }
-    }
-
     try {
         const idToken = auth?.currentUser ? await auth.currentUser.getIdToken().catch(() => null) : null;
         const headers: Record<string, string> = {
@@ -1911,23 +2050,6 @@ export const sendWhatsApp = async (data: {
             body: JSON.stringify(data)
         });
         const res = await response.json();
-
-        // Registramos el resultado (éxito o error) en Firestore para trazabilidad e integración
-        try {
-            const logsRef = collection(db, 'whatsapp_logs');
-            await addDoc(logsRef, {
-                to: data.to,
-                message: data.message,
-                mode: data.whatsappMode || 'direct',
-                success: res.success || false,
-                sid: res.sid || '',
-                error: res.error || '',
-                timestamp: new Date().toISOString()
-            });
-        } catch (logErr) {
-            console.warn("Could not log WhatsApp to Firestore:", logErr);
-        }
-
         return res;
     } catch (err: any) {
         return { success: false, message: err.message || 'Error al conectar con el servidor', error: err.message };

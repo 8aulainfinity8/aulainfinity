@@ -5,6 +5,7 @@ import * as api from '../../services/api';
 import { TeacherUser, StudentUser, Conversation } from '../../types';
 import { NotificationContext } from '../../contexts/NotificationContext';
 import { AppConfigContext } from '../../contexts/AppConfigContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '../ui/Button';
 import { ConfirmationModal } from '../ConfirmationModal';
@@ -62,6 +63,7 @@ export interface AdminTeacherApprovalPageProps {
 }
 
 export const AdminTeacherApprovalPage: React.FC<AdminTeacherApprovalPageProps> = ({ hideHeader, onOpenCommunication }) => {
+    const { user } = useAuth();
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const { addToast } = useContext(NotificationContext);
@@ -119,8 +121,9 @@ export const AdminTeacherApprovalPage: React.FC<AdminTeacherApprovalPageProps> =
     });
 
     const { data: conversations } = useQuery<Conversation[]>({
-        queryKey: ['conversations'],
-        queryFn: api.fetchConversations
+        queryKey: ['conversations', user?.id],
+        queryFn: () => user?.id ? api.fetchUserChatsFromFirestore(user.id) : Promise.resolve([]),
+        enabled: !!user?.id
     });
 
     // Mutations

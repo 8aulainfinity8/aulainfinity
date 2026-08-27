@@ -120,12 +120,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const [firebaseRole, setFirebaseRole] = useState<'student' | 'teacher' | 'admin' | null>(null);
     const [firebaseAuthLoading, setFirebaseAuthLoading] = useState(true);
 
-    const isFirebaseAdmin = Boolean(firebaseEmailVerified && firebaseRole === 'admin');
+    const isFirebaseAdmin = Boolean(firebaseRole === 'admin');
 
     const { data: profile } = useQuery({
         queryKey: ['userProfile', user?.id],
         queryFn: () => getUserProfile(user!.id),
-        enabled: !!user?.id,
+        enabled: !!user && !!user.id && !!auth.currentUser,
         staleTime: 1000 * 60 * 5
     });
 

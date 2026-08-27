@@ -7,6 +7,7 @@ import { getDirectChatId, resolveUserUid } from '../../utils/chatUtils';
 export interface ActiveChannel {
     type: 'support' | 'teacher';
     teacher?: any;
+    convoId?: string;
 }
 
 interface ChatListProps {
@@ -22,14 +23,25 @@ export const ChatList: React.FC<ChatListProps> = ({ conversations, teachers, act
     const { t } = useI18n();
     const [filterTab, setFilterTab] = useState<'all' | 'teachers' | 'support'>('all');
 
-    const unreadSupport = conversations?.some(c => c.id === `support_${studentId}` && c.unreadByStudent) || false;
+    const unreadSupport = conversations?.some(c => (c.type === 'support' || c.id.startsWith('support_')) && c.unreadByStudent) || false;
 
     const unreadTeachersCount = (teachers || []).filter((t: any) => {
         const teacherUid = resolveUserUid(t);
         const canonicalConvoId = getDirectChatId(studentId, teacherUid);
         const legacyConvoId = `${studentId}_${t.id}`;
-        return conversations?.some(c => (c.id === canonicalConvoId || c.id === legacyConvoId) && c.unreadByStudent);
+        return conversations?.some(c => (c.id === canonicalConvoId || c.id === legacyConvoId || c.teacherId === teacherUid) && c.unreadByStudent);
     }).length;
+
+    const extraDirectConvos = (conversations || []).filter(c => {
+        if (c.type !== 'direct' && !c.id.startsWith('direct_')) return false;
+        const matchedByTeacherList = (teachers || []).some(t => {
+            const tUid = resolveUserUid(t);
+            return c.id === getDirectChatId(studentId, tUid) || c.id === `${studentId}_${t.id}` || c.teacherId === tUid;
+        });
+        return !matchedByTeacherList;
+    });
+
+    const supportConvos = (conversations || []).filter(c => c.type === 'support' || c.id.startsWith('support_'));
 
     return (
         <div className={`w-full md:w-1/3 max-w-[360px] border-r dark:border-slate-700 bg-white dark:bg-slate-800 flex-col flex-shrink-0 min-w-0 overflow-hidden ${showOnMobile ? 'flex' : 'hidden md:flex'}`}>
@@ -61,7 +73,7 @@ export const ChatList: React.FC<ChatListProps> = ({ conversations, teachers, act
                         }`}
                     >
                         <span>Profesores</span>
-                        {unreadTeachersCount > 0 && (
+                        {(unreadTeachersCount > 0 || extraDirectConvos.some(c => c.unreadByStudent)) && (
                              <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
                         )}
                     </button>
@@ -91,7 +103,7 @@ export const ChatList: React.FC<ChatListProps> = ({ conversations, teachers, act
                                 Chat Profesores (Directo 1 a 1)
                             </span>
                             <span className="text-[10px] bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-md font-bold">
-                                {teachers?.length || 0}
+                                {(teachers?.length || 0) + extraDirectConvos.length}
                             </span>
                         </div>
 
@@ -101,13 +113,16 @@ export const ChatList: React.FC<ChatListProps> = ({ conversations, teachers, act
                                     const teacherUid = resolveUserUid(t);
                                     const canonicalConvoId = getDirectChatId(studentId, teacherUid);
                                     const legacyConvoId = `${studentId}_${t.id}`;
-                                    const unread = conversations?.some(c => (c.id === canonicalConvoId || c.id === legacyConvoId) && c.unreadByStudent) || false;
-                                    const isSelected = activeChannel.type === 'teacher' && resolveUserUid(activeChannel.teacher) === teacherUid;
+                                    const convo = conversations?.find(c => c.id === canonicalConvoId || c.id === legacyConvoId || c.teacherId === teacherUid);
+                                    const unread = convo?.unreadByStudent || conversations?.some(c => (c.id === canonicalConvoId || c.id === legacyConvoId) && c.unreadByStudent) || false;
+                                    const isSelected = activeChannel.type === 'teacher' && (
+                                        activeChannel.convoId ? activeChannel.convoId === (convo?.id || canonicalConvoId) : resolveUserUid(activeChannel.teacher) === teacherUid
+                                    );
 
                                     return (
                                         <button
                                             key={t.id}
-                                            onClick={() => onSelectChannel({ type: 'teacher', teacher: t })}
+                                            onClick={() => onSelectChannel({ type: 'teacher', teacher: t, convoId: convo?.id || canonicalConvoId })}
                                             className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all cursor-pointer border ${
                                                 isSelected 
                                                     ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700 text-indigo-900 dark:text-indigo-100 shadow-sm' 
@@ -134,13 +149,53 @@ export const ChatList: React.FC<ChatListProps> = ({ conversations, teachers, act
                                                     </span>
                                                 </div>
                                                 <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                                                    {t.category || 'Chat directo alumno-profesor'}
+                                                    {convo?.lastMessageText || t.category || 'Chat directo alumno-profesor'}
                                                 </p>
                                             </div>
                                         </button>
                                     );
                                 })
-                            ) : (
+                            ) : null}
+
+                            {extraDirectConvos.map(c => {
+                                const isSelected = activeChannel.type === 'teacher' && activeChannel.convoId === c.id;
+                                const unread = c.unreadByStudent;
+                                const name = c.teacherName || 'Administrador / Docente';
+
+                                return (
+                                    <button
+                                        key={c.id}
+                                        onClick={() => onSelectChannel({ type: 'teacher', teacher: { id: c.teacherId || 'admin', name }, convoId: c.id })}
+                                        className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all cursor-pointer border ${
+                                            isSelected 
+                                                ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700 text-indigo-900 dark:text-indigo-100 shadow-sm' 
+                                                : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-700/50 text-slate-700 dark:text-slate-300'
+                                        }`}
+                                    >
+                                        <div className="relative shrink-0">
+                                            <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 flex items-center justify-center font-bold text-sm">
+                                                {name[0] || 'A'}
+                                            </div>
+                                            {unread && (
+                                                <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-rose-500 border-2 border-white dark:border-slate-800 rounded-full animate-bounce"></span>
+                                            )}
+                                        </div>
+                                        <div className="text-left flex-1 min-w-0">
+                                            <div className="flex items-center justify-between gap-1">
+                                                <p className="font-extrabold truncate text-xs sm:text-sm">{name}</p>
+                                                <span className="text-[9px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-100/80 dark:bg-indigo-900/40 px-1.5 py-0.5 rounded">
+                                                    Directo
+                                                </span>
+                                            </div>
+                                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                                                {c.lastMessageText || 'Mensaje directo'}
+                                            </p>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+
+                            {(!teachers || teachers.length === 0) && extraDirectConvos.length === 0 && (
                                 <div className="p-3 text-center text-xs text-slate-400 italic">
                                     No hay profesores disponibles actualmente.
                                 </div>
@@ -156,35 +211,76 @@ export const ChatList: React.FC<ChatListProps> = ({ conversations, teachers, act
                             <Headphones className="w-3.5 h-3.5" />
                             Canal de Asistencia y Soporte
                         </div>
-                        <div className="mt-1">
-                            <button
-                                onClick={() => onSelectChannel({ type: 'support' })}
-                                className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all cursor-pointer border ${
-                                    activeChannel.type === 'support' 
-                                        ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-100 shadow-sm' 
-                                        : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-700/50 text-slate-700 dark:text-slate-300'
-                                }`}
-                            >
-                                <div className="relative shrink-0">
-                                    <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-600 dark:text-amber-300 flex items-center justify-center font-bold">
-                                        <Headphones className="w-5 h-5" />
+                        <div className="mt-1 space-y-1">
+                            {supportConvos.length > 0 ? (
+                                supportConvos.map(c => {
+                                    const isSelected = activeChannel.type === 'support' && (
+                                        activeChannel.convoId ? activeChannel.convoId === c.id : true
+                                    );
+                                    const unread = c.unreadByStudent;
+
+                                    return (
+                                        <button
+                                            key={c.id}
+                                            onClick={() => onSelectChannel({ type: 'support', convoId: c.id })}
+                                            className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all cursor-pointer border ${
+                                                isSelected 
+                                                    ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-100 shadow-sm' 
+                                                    : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-700/50 text-slate-700 dark:text-slate-300'
+                                            }`}
+                                        >
+                                            <div className="relative shrink-0">
+                                                <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-600 dark:text-amber-300 flex items-center justify-center font-bold">
+                                                    <Headphones className="w-5 h-5" />
+                                                </div>
+                                                {unread && (
+                                                    <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-rose-500 border-2 border-white dark:border-slate-800 rounded-full animate-bounce"></span>
+                                                )}
+                                            </div>
+                                            <div className="text-left flex-1 min-w-0">
+                                                <div className="flex items-center justify-between gap-1">
+                                                    <p className="font-extrabold truncate text-xs sm:text-sm">Soporte Técnico</p>
+                                                    <span className="text-[9px] font-bold text-amber-600 dark:text-amber-400 bg-amber-100/80 dark:bg-indigo-900/40 px-1.5 py-0.5 rounded">
+                                                        Ayuda
+                                                    </span>
+                                                </div>
+                                                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                                                    {c.lastMessageText || 'Plataforma, accesos y ayuda administrativa'}
+                                                </p>
+                                            </div>
+                                        </button>
+                                    );
+                                })
+                            ) : (
+                                <button
+                                    onClick={() => onSelectChannel({ type: 'support', convoId: `support_${studentId}` })}
+                                    className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all cursor-pointer border ${
+                                        activeChannel.type === 'support' 
+                                            ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-100 shadow-sm' 
+                                            : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-700/50 text-slate-700 dark:text-slate-300'
+                                    }`}
+                                >
+                                    <div className="relative shrink-0">
+                                        <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-600 dark:text-amber-300 flex items-center justify-center font-bold">
+                                            <Headphones className="w-5 h-5" />
+                                        </div>
+                                        {unreadSupport && (
+                                            <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-rose-500 border-2 border-white dark:border-slate-800 rounded-full animate-bounce"></span>
+                                        )}
                                     </div>
-                                    {unreadSupport && (
-                                        <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-rose-500 border-2 border-white dark:border-slate-800 rounded-full animate-bounce"></span>
-                                    )}
-                                </div>
-                                <div className="text-left flex-1 min-w-0">
-                                    <div className="flex items-center justify-between gap-1">
-                                        <p className="font-extrabold truncate text-xs sm:text-sm">Soporte Técnico</p>
-                                        <span className="text-[9px] font-bold text-amber-600 dark:text-amber-400 bg-amber-100/80 dark:bg-indigo-900/40 px-1.5 py-0.5 rounded">
-                                            Ayuda
-                                        </span>
+                                    <div className="text-left flex-1 min-w-0">
+                                        <div className="flex items-center justify-between gap-1">
+                                            <p className="font-extrabold truncate text-xs sm:text-sm">Soporte Técnico</p>
+                                            <span className="text-[9px] font-bold text-amber-600 dark:text-amber-400 bg-amber-100/80 dark:bg-indigo-900/40 px-1.5 py-0.5 rounded">
+                                                Ayuda
+                                            </span>
+                                        </div>
+                                        <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                                            Plataforma, accesos y ayuda administrativa
+                                        </p>
                                     </div>
-                                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                                        Plataforma, accesos y ayuda administrativa
-                                    </p>
-                                </div>
-                            </button>
+                                </button>
+                            )}
                         </div>
                     </div>
                 )}

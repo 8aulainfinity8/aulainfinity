@@ -1,6 +1,7 @@
 import React, { useContext, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as api from '../services/api';
+import { auth } from '../services/firebase';
 import { AuthContext } from '../contexts/AuthContext';
 import { StudentProgressContext } from '../contexts/StudentProgressContext';
 import { badgesData } from '../data/badges';
@@ -88,11 +89,15 @@ export const StudentProgressPage: React.FC = () => {
     const { user } = useContext(AuthContext);
     const { watchedVideos } = useContext(StudentProgressContext);
     
-    const { data: courses, isLoading: coursesLoading } = useQuery<CourseLevel[]>({ queryKey: ['courses'], queryFn: api.fetchCourses });
+    const { data: courses, isLoading: coursesLoading } = useQuery<CourseLevel[]>({ 
+        queryKey: ['courses'], 
+        queryFn: api.fetchCourses,
+        enabled: !!user && !!user.id && !!auth.currentUser,
+    });
     const { data: studentAnswers, isLoading: answersLoading } = useQuery<StudentAnswer[]>({
         queryKey: ['studentAnswers', user?.id],
         queryFn: () => api.fetchStudentAnswers(user!.id),
-        enabled: !!user,
+        enabled: !!user && !!user.id && !!auth.currentUser,
     });
     
     const enrolledCourses = useMemo(() => {

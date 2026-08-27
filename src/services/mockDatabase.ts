@@ -26,58 +26,48 @@ import { agendaData } from '../data/agenda';
 import { quizzesData } from '../data/quizzes';
 import { studentAnswersData } from '../data/studentAnswers';
 import { conversationsData, directMessagesData } from '../data/directMessages';
+import { resolveConversationMetadata } from '../utils/chatUtils';
 
 import { eventEmitter } from './eventService';
 export { eventEmitter };
-export const closedSupportConversationIds: Set<string> = new Set();
+export const closedSupportConversationIds: Set<string> = (() => {
+    try {
+        const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('closed_support_conversation_ids') : null;
+        if (stored) return new Set(JSON.parse(stored));
+    } catch (_) {}
+    return new Set<string>();
+})();
+
+export const saveClosedSupportConversationIds = () => {
+    try {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('closed_support_conversation_ids', JSON.stringify(Array.from(closedSupportConversationIds)));
+        }
+    } catch (_) {}
+};
+
 export const isConversationClosed = (convoId: string, studentId?: string): boolean => {
     if (!convoId && !studentId) return false;
-    const cleanConvoId = (convoId || '').replace(/^direct_/, '');
-    const cleanStudentId = (studentId || '').replace(/^direct_/, '') || cleanConvoId.split('_')[0];
+    const resolved = resolveConversationMetadata(convoId, { studentId });
+    const cleanConvoId = resolved.normalizedId || convoId;
+    const cleanStudentId = resolved.studentId || studentId || '';
     return closedSupportConversationIds.has(convoId) ||
            closedSupportConversationIds.has(`direct_${convoId}`) ||
            closedSupportConversationIds.has(cleanConvoId) ||
            closedSupportConversationIds.has(`direct_${cleanConvoId}`) ||
            (!!cleanStudentId && (
                closedSupportConversationIds.has(cleanStudentId) ||
-               closedSupportConversationIds.has(`direct_${cleanStudentId}`)
+               closedSupportConversationIds.has(`direct_${cleanStudentId}`) ||
+               closedSupportConversationIds.has(`support_${cleanStudentId}`)
            ));
 };
 
 export function parseConversationParticipants(conversationId: string | null | undefined): { studentId: string | null; teacherId: string | null } {
     if (!conversationId) return { studentId: null, teacherId: null };
-    const clean = conversationId.replace(/^direct_/, '').replace(/^peer_/, '');
-    
-    for (const student of (usersData as any[] || [])) {
-        if (!student.id) continue;
-        if (clean === student.id) {
-            return { studentId: student.id, teacherId: null };
-        }
-        if (clean.startsWith(student.id + '_')) {
-            const remainder = clean.slice(student.id.length + 1);
-            const teacher = (teachersData || []).find(t => t.id === remainder) || (usersData as any[] || []).find(u => u.id === remainder && u.role === 'teacher');
-            if (teacher) {
-                return { studentId: student.id, teacherId: teacher.id };
-            }
-            return { studentId: student.id, teacherId: remainder };
-        }
-    }
-
-    for (const teacher of (teachersData || [])) {
-        if (!teacher.id) continue;
-        if (clean.startsWith(teacher.id + '_')) {
-            const remainder = clean.slice(teacher.id.length + 1);
-            return { studentId: remainder, teacherId: teacher.id };
-        }
-    }
-
-    const parts = clean.split('_');
-    if (parts.length <= 1) {
-        return { studentId: clean, teacherId: null };
-    }
+    const resolved = resolveConversationMetadata(conversationId);
     return {
-        studentId: parts[0],
-        teacherId: parts.slice(1).join('_')
+        studentId: resolved.studentId,
+        teacherId: resolved.teacherId
     };
 }
 import * as geminiService from './geminiService';
@@ -2224,6 +2214,7 @@ export const dbSendMessage = (messageData: Omit<DirectMessage, 'id' | 'timestamp
     closedSupportConversationIds.delete(messageData.conversationId);
     closedSupportConversationIds.delete(cleanId);
     closedSupportConversationIds.delete(`direct_${cleanId}`);
+    saveClosedSupportConversationIds();
 
     const newMessage: DirectMessage = { ...messageData, id: `msg${Date.now()}`, timestamp: new Date().toISOString() };
     directMessagesData.push(newMessage);
@@ -2351,7 +2342,23 @@ export const dbMarkConversationAsRead = (conversationId: string, role?: string):
     eventEmitter.emit('message-update', { conversationId, read: true });
 };
 
-export const dbCloseSupportConversation = (conversationId: string, studentId: string, closedBy: string = 'teacher'): void => {
+export const dbCloseSupportConversation = (conversationId: string, studentId: string, closedBy: string = 'teacher', emitEvents: boolean = true): void => {
+    if (closedBy === 'student') {
+        const convo = conversationsData.find(c => c.id === conversationId || c.studentId === studentId);
+        if (convo) {
+            convo.status = 'resolved';
+            convo.closed = true;
+            convo.closedBy = 'student';
+            convo.closedAt = new Date().toISOString();
+        }
+        if (emitEvents) {
+            eventEmitter.emit('message-update', { conversationId, closed: true });
+            eventEmitter.emit('direct-message-update', { conversationId, closed: true });
+            eventEmitter.emit('tutoring-request-update', { conversationId, closed: true });
+        }
+        return;
+    }
+
     const cleanConvoId = (conversationId || '').replace(/^direct_/, '');
     const cleanStudentId = (studentId || '').replace(/^direct_/, '') || cleanConvoId.split('_')[0];
 
@@ -2416,10 +2423,13 @@ export const dbCloseSupportConversation = (conversationId: string, studentId: st
     if (studentId) closedSupportConversationIds.add(studentId);
     if (cleanConvoId) closedSupportConversationIds.add(cleanConvoId);
     if (cleanStudentId) closedSupportConversationIds.add(cleanStudentId);
+    saveClosedSupportConversationIds();
 
-    eventEmitter.emit('message-update', { conversationId, closed: true });
-    eventEmitter.emit('direct-message-update', { conversationId, closed: true });
-    eventEmitter.emit('tutoring-request-update', { conversationId, closed: true });
+    if (emitEvents) {
+        eventEmitter.emit('message-update', { conversationId, closed: true });
+        eventEmitter.emit('direct-message-update', { conversationId, closed: true });
+        eventEmitter.emit('tutoring-request-update', { conversationId, closed: true });
+    }
 };
 
 export const dbAssignConversation = (conversationId: string, teacherId: string | null): Conversation => {

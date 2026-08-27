@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import type { ExamEvent } from '../types';
 import { AuthContext } from '../contexts/AuthContext';
 import { NotificationContext } from '../contexts/NotificationContext';
+import { auth } from '../services/firebase';
 
 export const useAgendaEvents = () => {
     const { user } = useContext(AuthContext);
@@ -20,7 +21,7 @@ export const useAgendaEvents = () => {
     const { data: events = [], isLoading } = useQuery<ExamEvent[]>({
         queryKey: ['agendaEvents', user?.id, user?.role],
         queryFn: () => api.fetchAgendaEvents(user?.role === 'admin' ? undefined : user!.id),
-        enabled: !!user,
+        enabled: !!user && !!user.id && !!auth.currentUser,
     });
 
     const deleteMutation = useMutation({

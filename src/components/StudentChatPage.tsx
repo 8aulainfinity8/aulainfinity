@@ -29,11 +29,12 @@ import {
     ChevronDown
 } from 'lucide-react';
 import { ROUTES } from '../constants/routes';
-import { normalizeMessageTimestamp, formatMessageTime } from '../utils/chatUtils';
+import { normalizeMessageTimestamp, formatMessageTime, resolveConversationMetadata } from '../utils/chatUtils';
 import { AuthContext } from '../contexts/AuthContext';
 import { useChat } from '../hooks/useChat';
 import { ClassReplayModal } from './ClassReplayModal';
 import { NotificationContext } from '../contexts/NotificationContext';
+import { StudentNotificationContext } from '../contexts/StudentNotificationContext';
 import * as api from '../services/api';
 import { SubscriptionGate } from './SubscriptionGate';
 import { Spinner } from './ui/Spinner';
@@ -44,7 +45,7 @@ import type { StudentPeerConversation, StudentPeerMessage, StudentFriend, Course
 import { CameraModal } from './CameraModal';
 import { VoiceGroupCall } from './VoiceGroupCall';
 import { Whiteboard } from './Whiteboard';
-import { db } from '../services/firebase';
+import { db, auth } from '../services/firebase';
 import { doc, onSnapshot, collection } from 'firebase/firestore';
 
 // Helper to check if two dates are on the same day
@@ -213,6 +214,8 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
     const { t } = useI18n();
     const { user } = useContext(AuthContext);
     const { addToast } = useContext(NotificationContext);
+    const studentNotifications = useContext(StudentNotificationContext);
+    const unreadSupportCount = studentNotifications?.unreadSupportCount ?? 0;
     const queryClient = useQueryClient();
     const handleBack = useBackNavigation();
     const navigate = useNavigate();
@@ -366,10 +369,15 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
     const { data: friends = [], isLoading: loadingFriends } = useQuery<StudentFriend[]>({
         queryKey: ['peer-friends', studentId],
         queryFn: () => api.fetchStudentFriends(studentId),
-        enabled: !!studentId,
+        enabled: !!user && !!user.id && !!auth.currentUser && !!studentId,
     });
 
-    console.log(`[F110.30] [USECHAT_CALL] | timestamp: ${performance.now()} | activeConvoId: ${activeConvoId}`);
+    useEffect(() => {
+        if (activeConvoId) {
+            console.log(`[F110.30] [USECHAT_CALL] | timestamp: ${performance.now()} | activeConvoId: ${activeConvoId}`);
+        }
+    }, [activeConvoId]);
+
     const { messages: unifiedMessages, loading: loadingUnifiedMessages, sendMessage, markAsRead } = useChat(activeConvoId, studentId);
 
     useEffect(() => {
@@ -387,8 +395,8 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
     // Fetch conversations
     const { data: conversations = [], isLoading: loadingConversations } = useQuery<StudentPeerConversation[]>({
         queryKey: ['peer-conversations', studentId],
-        queryFn: () => api.fetchPeerConversations(studentId),
-        enabled: !!studentId,
+        queryFn: () => api.fetchUserPeerChatsFromFirestore(studentId),
+        enabled: !!user && !!user.id && !!auth.currentUser && !!studentId,
         staleTime: 30000,
     });
 
@@ -396,7 +404,7 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
     const { data: groupConversations = [], isLoading: loadingGroupConversations } = useQuery<CourseGroupConversation[]>({
         queryKey: ['group-conversations', studentId],
         queryFn: () => api.fetchCourseGroupConversations(studentId),
-        enabled: !!studentId,
+        enabled: !!user && !!user.id && !!auth.currentUser && !!studentId,
         staleTime: 30000,
     });
 
@@ -404,7 +412,7 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
     const { data: classmatesOfSameLevel = [], isLoading: loadingClassmates } = useQuery({
         queryKey: ['classmates-same-level', studentId],
         queryFn: () => api.fetchClassmatesOfSameLevel(studentId),
-        enabled: !!studentId,
+        enabled: !!user && !!user.id && !!auth.currentUser && !!studentId,
     });
 
     // Helper to verify if a conversation or board ID belongs to current student
@@ -554,9 +562,7 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
                 textareaRef.current.style.height = 'auto';
             }
             if (activeChatType === 'group') {
-                queryClient.invalidateQueries({ queryKey: ['group-conversations', studentId] });
-            } else {
-                queryClient.invalidateQueries({ queryKey: ['peer-conversations', studentId] });
+                // List will be updated via realtime message listener
             }
         } catch (error) {
             addToast('Error al enviar el mensaje. Inténtalo más tarde.', 'error');
@@ -565,32 +571,26 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
         }
     };
 
-    // Mark as read immediately when active chat changes or receiving messages
+    // Mark as read immediately when active chat changes
     useEffect(() => {
         if (activeConvoId && studentId) {
             if (activeChatType === 'private') {
                 markAsRead();
-                queryClient.invalidateQueries({ queryKey: ['peer-conversations', studentId] });
             } else if (activeChatType === 'group') {
                 api.markCourseGroupAsRead(activeConvoId, studentId);
-                queryClient.invalidateQueries({ queryKey: ['group-conversations', studentId] });
+                // NOTA P5.2: Eliminamos invalidateQueries redundante. 
+                // La caché se actualiza vía 'group-message-update' con setQueryData.
             }
         }
-    }, [activeConvoId, activeChatType, studentId, messages?.length, queryClient, markAsRead]);
+    }, [activeConvoId, activeChatType, studentId, markAsRead]);
 
     // Real-time peer and group synchronization listening to mock push updates
     useEffect(() => {
         const handlePeerMessage = (msg: any) => {
-            if (activeChatType === 'private' && msg?.conversationId === activeConvoId) {
-                queryClient.invalidateQueries({ queryKey: ['peer-messages', activeConvoId] });
-            }
-            queryClient.invalidateQueries({ queryKey: ['peer-conversations', studentId] });
+            // P5.3/P5.4: Relying on setQueryData in NotificationProvider and useChat
         };
         const handleGroupMessage = (msg: any) => {
-            if (activeChatType === 'group' && msg?.courseId === activeConvoId) {
-                queryClient.invalidateQueries({ queryKey: ['group-messages', activeConvoId] });
-            }
-            queryClient.invalidateQueries({ queryKey: ['group-conversations', studentId] });
+            // P5.3/P5.4: Relying on setQueryData in NotificationProvider and useChat
         };
 
         eventEmitter.on('peer-message-update', handlePeerMessage);
@@ -637,9 +637,9 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
             let destinationStudentId = '';
             if (convo) {
                 destinationStudentId = convo.participantIds.find(id => id !== studentId) || '';
-            } else if (activeConvoId.startsWith('peer_')) {
-                const parts = activeConvoId.replace('peer_', '').split('_');
-                destinationStudentId = parts.find(p => p !== studentId) || parts[0] || '';
+            } else if (activeConvoId) {
+                const resolved = resolveConversationMetadata(activeConvoId, { type: 'peer' });
+                destinationStudentId = resolved.participants.find(p => p !== studentId) || resolved.participants[0] || '';
             }
 
             if (!destinationStudentId) return null;
@@ -867,11 +867,14 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
                                 onClick={() => {
                                     navigate(ROUTES.CHAT);
                                 }}
-                                className="flex-1 py-1.5 px-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer text-emerald-600 dark:text-emerald-400 bg-emerald-50/80 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200/50 dark:border-emerald-800/40"
+                                className="relative flex-1 py-1.5 px-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer text-emerald-600 dark:text-emerald-400 bg-emerald-50/80 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200/50 dark:border-emerald-800/40"
                                 title="Ir al Chat de Dudas con Profesores"
                             >
                                 <HelpCircle className="w-3.5 h-3.5" />
                                 <span>Dudas</span>
+                                {unreadSupportCount > 0 && (
+                                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse ml-0.5"></span>
+                                )}
                             </button>
                         </div>
                     </div>

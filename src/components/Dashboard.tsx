@@ -20,6 +20,7 @@ import { Link, Navigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'motion/react';
 import { AuthContext } from '../contexts/AuthContext';
+import { auth } from '../services/firebase';
 import { StudentProgressContext } from '../contexts/StudentProgressContext';
 import { eventEmitter } from '../services/eventService';
 // FIX: Corrected import path.
@@ -1485,18 +1486,19 @@ export const StudentDashboard: React.FC = () => {
     const { data: courses = [], isLoading: coursesLoading } = useQuery<CourseLevel[]>({
         queryKey: ['courses'],
         queryFn: api.fetchCourses,
+        enabled: !!user && !!user.id && !!auth.currentUser,
     });
     
     const { data: events = [] } = useQuery<ExamEvent[]>({
         queryKey: ['agendaEvents', user?.id],
         queryFn: () => api.fetchAgendaEvents(user!.id),
-        enabled: !!user,
+        enabled: !!user && !!user.id && !!auth.currentUser,
     });
 
     const { data: studentAnswers = [] } = useQuery<StudentAnswer[]>({
         queryKey: ['studentAnswers', user?.id],
         queryFn: () => api.fetchStudentAnswers(user!.id),
-        enabled: !!user,
+        enabled: !!user && !!user.id && !!auth.currentUser,
     });
 
     const videoMap = useMemo(() => {

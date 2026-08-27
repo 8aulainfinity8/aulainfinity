@@ -67,6 +67,11 @@ async function main() {
     console.log(`Disabled: ${userRecord.disabled}`);
     console.log('Custom Claims actuales:', JSON.stringify(userRecord.customClaims || {}, null, 2));
 
+    if (!userRecord.emailVerified) {
+      await auth.updateUser(userRecord.uid, { emailVerified: true });
+      console.log('✅ Email programmatically verified via Admin SDK.');
+    }
+
     const targetClaims = {
       ...(userRecord.customClaims || {}),
       role: 'admin',

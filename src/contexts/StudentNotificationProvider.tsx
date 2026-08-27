@@ -6,6 +6,7 @@ import { AuthContext } from './AuthContext';
 import { NotificationContext } from './NotificationContext';
 import { StudentNotificationContext } from './StudentNotificationContext';
 import * as api from '../services/api';
+import { auth } from '../services/firebase';
 import { eventEmitter } from '../services/eventService';
 import { findVideoById } from '../data/database';
 import type { Video, Comment as CommentType, StudentUser, CourseLevel, TutoringRequest, Conversation, StudentPeerConversation, CourseGroupConversation } from '../types';
@@ -19,13 +20,13 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
     const { data: allComments } = useQuery<CommentType[]>({
         queryKey: ['allComments'],
         queryFn: api.fetchAllComments,
-        enabled: !!user && user.role === 'student',
+        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
     });
 
     const { data: allCourses } = useQuery<CourseLevel[]>({
         queryKey: ['courses'],
         queryFn: api.fetchCourses,
-        enabled: !!user && user.role === 'student',
+        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
     });
 
     // --- NEW: Centralized Student Chat Queries ---
@@ -34,9 +35,9 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
         isLoading: isConversationsLoading,
         refetch: refetchConversations 
     } = useQuery<Conversation[]>({
-        queryKey: ['conversations'],
-        queryFn: api.fetchConversations,
-        enabled: !!user && user.role === 'student',
+        queryKey: ['conversations', user?.id],
+        queryFn: () => api.fetchUserChatsFromFirestore(user!.id),
+        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
         staleTime: 30000,
     });
 
@@ -46,8 +47,8 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
         refetch: refetchPeerConversations 
     } = useQuery<StudentPeerConversation[]>({
         queryKey: ['peer-conversations', user?.id],
-        queryFn: () => api.fetchPeerConversations(user!.id),
-        enabled: !!user && user.role === 'student',
+        queryFn: () => api.fetchUserPeerChatsFromFirestore(user!.id),
+        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
         staleTime: 30000,
     });
 
@@ -58,7 +59,7 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
     } = useQuery<CourseGroupConversation[]>({
         queryKey: ['group-conversations', user?.id],
         queryFn: () => api.fetchCourseGroupConversations(user!.id),
-        enabled: !!user && user.role === 'student',
+        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
         staleTime: 30000,
     });
 
@@ -68,7 +69,7 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
     } = useQuery<TutoringRequest[]>({
         queryKey: ['tutoringRequests'],
         queryFn: api.fetchTutoringRequests,
-        enabled: !!user && user.role === 'student',
+        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
     });
 
     // --- NEW: Centralized Student Unread Counts ---
@@ -76,8 +77,9 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
         if (!user || user.role !== 'student' || !studentConversations) return 0;
         return studentConversations.filter(c => {
             if (!c || !c.id) return false;
-            const belongsToStudent = c.studentId === user.id || c.id === user.id || c.id.startsWith(user.id + '_');
-            return belongsToStudent && !!c.unreadByStudent;
+            const isSupport = c.type === 'support' || c.id === user.id || c.id === `support_${user.id}` || c.id.startsWith('support_');
+            const belongsToStudent = c.studentId === user.id || c.id === user.id || c.id === `support_${user.id}` || c.id.startsWith(user.id + '_') || c.id.startsWith(`support_${user.id}`);
+            return isSupport && belongsToStudent && !!c.unreadByStudent;
         }).length;
     }, [studentConversations, user]);
 
@@ -146,10 +148,50 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
             }
         };
 
-        const handleMessageUpdate = () => {
-            refetchConversations();
-            refetchPeerConversations();
-            refetchGroupConversations();
+        const handleMessageUpdate = (payload: any) => {
+            const convoId = payload?.conversationId || payload?.courseId;
+            if (!convoId) return;
+
+            const isUnread = payload.read ? false : (payload.senderId !== user.id);
+
+            // Update support/private conversations
+            queryClient.setQueryData(['conversations', user.id], (oldData: Conversation[] | undefined) => {
+                if (!oldData) return oldData;
+                return oldData.map(c => c.id === convoId ? {
+                    ...c,
+                    lastMessageText: payload.read ? c.lastMessageText : (payload.text || c.lastMessageText),
+                    lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.timestamp || c.lastMessageTimestamp),
+                    unreadByStudent: isUnread
+                } : c);
+            });
+
+            // Update peer conversations
+            queryClient.setQueryData(['peer-conversations', user.id], (oldData: StudentPeerConversation[] | undefined) => {
+                if (!oldData) return oldData;
+                return oldData.map(c => c.id === convoId ? {
+                    ...c,
+                    lastMessageText: payload.read ? c.lastMessageText : (payload.text || c.lastMessageText),
+                    lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.timestamp || c.lastMessageTimestamp),
+                    unreadByStudentId: {
+                        ...c.unreadByStudentId,
+                        [user.id]: isUnread
+                    }
+                } : c);
+            });
+
+            // Update group conversations
+            queryClient.setQueryData(['group-conversations', user.id], (oldData: CourseGroupConversation[] | undefined) => {
+                if (!oldData) return oldData;
+                return oldData.map(c => c.id === convoId ? {
+                    ...c,
+                    lastMessageText: payload.read ? c.lastMessageText : (payload.text || c.lastMessageText),
+                    lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.timestamp || c.lastMessageTimestamp),
+                    unreadByUserId: {
+                        ...c.unreadByUserId,
+                        [user.id]: isUnread
+                    }
+                } : c);
+            });
         };
 
         eventEmitter.on('video-added', handleNewVideo);

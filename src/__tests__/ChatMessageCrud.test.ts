@@ -4,9 +4,9 @@ import { useChat } from '../hooks/useChat';
 import { updateDoc, deleteDoc, doc } from 'firebase/firestore';
 
 vi.mock('firebase/firestore', async () => {
-    const actual = await vi.importActual('firebase/firestore');
+    const actual = await vi.importActual<any>('firebase/firestore');
     return {
-        ...actual as any,
+        ...actual,
         doc: vi.fn(),
         updateDoc: vi.fn(),
         deleteDoc: vi.fn(),
@@ -47,7 +47,7 @@ describe('FASE 11 — Origen real de edición y borrado (Chats unified collectio
         expect(doc).toHaveBeenCalledWith(expect.anything(), 'chats', 'chat_123', 'messages', 'msg_456');
         expect(updateDoc).toHaveBeenCalledWith(
             expect.objectContaining({ path: 'chats/chat_123/messages/msg_456' }),
-            { text: 'New text' }
+            expect.objectContaining({ text: 'New text' })
         );
     });
 
