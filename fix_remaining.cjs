@@ -1,5 +1,9 @@
 const fs = require('fs');
-const files = ['src/components/StudentChatPage.tsx', 'src/components/ChatPage.tsx'];
+const files = [
+  'src/components/TeacherDashboard.tsx',
+  'src/components/StudentTutoringProgressChart.tsx',
+  'src/contexts/NewCommentsProvider.tsx'
+];
 
 files.forEach(file => {
   let content = fs.readFileSync(file, 'utf8');

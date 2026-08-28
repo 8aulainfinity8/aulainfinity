@@ -51,13 +51,13 @@ export const ChatPage: React.FC = () => {
     const { data: teachers, isLoading: isTeachersLoading } = useQuery({
         queryKey: ['teachers'],
         queryFn: api.fetchTeachers,
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
 
     const { data: conversations = [] } = useQuery<Conversation[]>({
         queryKey: ['conversations', studentId],
         queryFn: () => api.fetchUserChatsFromFirestore(studentId),
-        enabled: !!user && !!user.id && !!auth.currentUser && !!studentId,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && !!studentId,
         staleTime: 30000,
     });
 

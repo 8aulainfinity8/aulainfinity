@@ -45,7 +45,7 @@ export const TeacherStudentsPage: React.FC = () => {
   const { data: appConfig } = useQuery({
     queryKey: ['appConfig'],
     queryFn: api.fetchAppConfig,
-    enabled: !!user && !!user.id && !!auth.currentUser,
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
   });
 
   const aiEnabledGlobally = appConfig?.aiEnabled !== false;
@@ -78,7 +78,7 @@ export const TeacherStudentsPage: React.FC = () => {
   const { data: students = [], isLoading: isLoadingStudents, refetch: refetchStudents } = useQuery<StudentUser[]>({
     queryKey: ['users'],
     queryFn: api.fetchUsers,
-    enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'teacher' && hasAccess,
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user.role === 'teacher' && hasAccess,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
@@ -86,7 +86,7 @@ export const TeacherStudentsPage: React.FC = () => {
   const { data: courseLevels = [] } = useQuery<CourseLevel[]>({
     queryKey: ['course-levels'],
     queryFn: api.fetchCourses,
-    enabled: !!user && !!user.id && !!auth.currentUser && hasAccess,
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && hasAccess,
   });
 
   // Automatically show selected student details when user update happens or selected student changes

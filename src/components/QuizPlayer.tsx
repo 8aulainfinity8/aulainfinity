@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useContext, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
+import { auth } from '../services/firebase';
 import { motion } from 'motion/react';
 import * as api from '../services/api';
 import type { Quiz, Question, StudentAnswer } from '../types';
@@ -121,7 +122,7 @@ export const QuizPlayer: React.FC<{ videoId: string }> = ({ videoId }) => {
     const { data: pastAnswers, refetch: refetchAnswers } = useQuery<StudentAnswer[]>({
         queryKey: ['studentAnswers', user?.id],
         queryFn: () => user ? api.fetchStudentAnswers(user.id) : Promise.resolve([]),
-        enabled: !!user,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
 
     const quizAttempts = useMemo(() => {

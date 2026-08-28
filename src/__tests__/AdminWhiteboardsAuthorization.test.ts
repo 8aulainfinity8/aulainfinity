@@ -12,7 +12,8 @@ vi.mock('firebase/firestore', () => ({
     onSnapshot: vi.fn(() => vi.fn()),
     doc: vi.fn(),
     setDoc: vi.fn(),
-    getDoc: vi.fn()
+    getDoc: vi.fn(),
+    enableMultiTabIndexedDbPersistence: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('../../services/firebase', () => ({

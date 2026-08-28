@@ -1641,19 +1641,19 @@ export const AdminUsersPage: React.FC = () => {
     const { data: users, isLoading: usersLoading, isError: usersError, refetch: refetchUsers } = useQuery<StudentUser[]>({
         queryKey: ['users'],
         queryFn: api.fetchUsers,
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
 
     const { data: courses, isLoading: coursesLoading } = useQuery<CourseLevel[]>({
         queryKey: ['courses'],
         queryFn: api.fetchCourses,
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
 
     const { data: teachers, isLoading: teachersLoading, refetch: refetchTeachers } = useQuery<TeacherUser[]>({
         queryKey: ['teachers'],
         queryFn: api.fetchTeachers,
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
     
     const isLoading = usersLoading || coursesLoading;

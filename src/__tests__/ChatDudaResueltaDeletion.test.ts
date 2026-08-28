@@ -47,20 +47,20 @@ describe('Duda Resuelta — Pruebas de Borrado Completo y Seguro', () => {
         expect(typeof syncCloseSupportConversationInFirestore).toBe('function');
     });
 
-    it('TEST 3: closeSupportConversation por parte de un estudiante hace soft-close sin borrar', async () => {
-        const studentId = 'student_soft_close_789';
-        const convoId = 'direct_student_soft_close_789';
+    it('TEST 3: closeSupportConversation por parte de un estudiante realiza hard-delete completo', async () => {
+        const studentId = 'student_hard_delete_789';
+        const convoId = 'direct_student_hard_delete_789';
 
         dbMock.conversationsData.push({
             id: convoId,
             studentId: studentId,
-            studentName: 'Student Soft Close',
+            studentName: 'Student Hard Delete',
             lastMessageText: 'Ayuda',
             lastMessageTimestamp: new Date().toISOString()
         } as any);
 
         dbMock.directMessagesData.push({
-            id: 'msg_soft_1',
+            id: 'msg_hard_1',
             conversationId: convoId,
             senderId: studentId,
             text: 'Duda por resolver',
@@ -70,12 +70,9 @@ describe('Duda Resuelta — Pruebas de Borrado Completo y Seguro', () => {
         await api.closeSupportConversation(convoId, studentId, 'student');
 
         const convo = dbMock.conversationsData.find(c => c.id === convoId);
-        expect(convo).toBeDefined();
-        expect(convo?.status).toBe('resolved');
-        expect(convo?.closed).toBe(true);
-        expect(convo?.closedBy).toBe('student');
+        expect(convo).toBeUndefined();
 
         const msgs = dbMock.directMessagesData.filter(m => m.conversationId === convoId);
-        expect(msgs.length).toBe(1); // No borrado
+        expect(msgs.length).toBe(0);
     });
 });

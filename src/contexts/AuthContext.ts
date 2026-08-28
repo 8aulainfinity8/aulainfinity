@@ -125,7 +125,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { data: profile } = useQuery({
         queryKey: ['userProfile', user?.id],
         queryFn: () => getUserProfile(user!.id),
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
         staleTime: 1000 * 60 * 5
     });
 

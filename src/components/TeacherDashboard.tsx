@@ -48,7 +48,7 @@ const QuizSubmissionDetails: React.FC<{ videoId: string; answer: StudentAnswer }
     const { data: quiz, isLoading } = useQuery<Quiz | null>({
         queryKey: ['quiz', videoId],
         queryFn: () => api.fetchQuizByVideoId(videoId),
-        enabled: !!videoId && !!auth.currentUser,
+        enabled: !!videoId && !!auth?.currentUser,
         staleTime: 60000,
     });
 
@@ -185,7 +185,7 @@ export const TeacherDashboard: React.FC = () => {
     const { data: teachers = [] } = useQuery<TeacherUser[]>({ 
         queryKey: ['teachers'], 
         queryFn: api.fetchTeachers, 
-        enabled: !!user && !!user.id && !!auth.currentUser 
+        enabled: !!user && !!user.id && !!auth?.currentUser 
     });
 
     // Pending tutoring requests for this teacher
@@ -510,7 +510,7 @@ export const TeacherDashboard: React.FC = () => {
     const studentAnswersQuery = useQuery<StudentAnswer[]>({
         queryKey: ['studentAnswers', selectedStudent?.id],
         queryFn: () => api.fetchStudentAnswers(selectedStudent!.id),
-        enabled: !!selectedStudent
+        enabled: !!selectedStudent && !!user && !!user.id && !!auth?.currentUser
     });
 
     return (

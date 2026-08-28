@@ -20,13 +20,13 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
     const { data: allComments } = useQuery<CommentType[]>({
         queryKey: ['allComments'],
         queryFn: api.fetchAllComments,
-        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user.role === 'student',
     });
 
     const { data: allCourses } = useQuery<CourseLevel[]>({
         queryKey: ['courses'],
         queryFn: api.fetchCourses,
-        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user.role === 'student',
     });
 
     // --- NEW: Centralized Student Chat Queries ---
@@ -37,7 +37,7 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
     } = useQuery<Conversation[]>({
         queryKey: ['conversations', user?.id],
         queryFn: () => api.fetchUserChatsFromFirestore(user!.id),
-        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user.role === 'student',
         staleTime: 30000,
     });
 
@@ -48,7 +48,7 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
     } = useQuery<StudentPeerConversation[]>({
         queryKey: ['peer-conversations', user?.id],
         queryFn: () => api.fetchUserPeerChatsFromFirestore(user!.id),
-        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user.role === 'student',
         staleTime: 30000,
     });
 
@@ -59,7 +59,7 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
     } = useQuery<CourseGroupConversation[]>({
         queryKey: ['group-conversations', user?.id],
         queryFn: () => api.fetchCourseGroupConversations(user!.id),
-        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user.role === 'student',
         staleTime: 30000,
     });
 
@@ -69,7 +69,7 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
     } = useQuery<TutoringRequest[]>({
         queryKey: ['tutoringRequests'],
         queryFn: api.fetchTutoringRequests,
-        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user.role === 'student',
     });
 
     // --- NEW: Centralized Student Unread Counts ---

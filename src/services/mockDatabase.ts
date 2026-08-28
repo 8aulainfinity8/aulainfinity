@@ -2343,22 +2343,6 @@ export const dbMarkConversationAsRead = (conversationId: string, role?: string):
 };
 
 export const dbCloseSupportConversation = (conversationId: string, studentId: string, closedBy: string = 'teacher', emitEvents: boolean = true): void => {
-    if (closedBy === 'student') {
-        const convo = conversationsData.find(c => c.id === conversationId || c.studentId === studentId);
-        if (convo) {
-            convo.status = 'resolved';
-            convo.closed = true;
-            convo.closedBy = 'student';
-            convo.closedAt = new Date().toISOString();
-        }
-        if (emitEvents) {
-            eventEmitter.emit('message-update', { conversationId, closed: true });
-            eventEmitter.emit('direct-message-update', { conversationId, closed: true });
-            eventEmitter.emit('tutoring-request-update', { conversationId, closed: true });
-        }
-        return;
-    }
-
     const cleanConvoId = (conversationId || '').replace(/^direct_/, '');
     const cleanStudentId = (studentId || '').replace(/^direct_/, '') || cleanConvoId.split('_')[0];
 

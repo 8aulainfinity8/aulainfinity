@@ -36,7 +36,7 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   const { data: users, refetch: refetchUsers } = useQuery<StudentUser[]>({
     queryKey: ['users'],
     queryFn: api.fetchUsers,
-    enabled: !!user && !!user.id && !!auth.currentUser && (user?.role === 'admin' || user?.role === 'teacher'),
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && (user?.role === 'admin' || user?.role === 'teacher'),
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
@@ -44,13 +44,13 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   const { data: teachers, refetch: refetchTeachers } = useQuery<TeacherUser[]>({
     queryKey: ['teachers'],
     queryFn: api.fetchTeachers,
-    enabled: !!user && !!user.id && !!auth.currentUser && (user?.role === 'admin' || user?.role === 'teacher'),
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && (user?.role === 'admin' || user?.role === 'teacher'),
   });
 
   const { data: agendaEvents, refetch: refetchAgendaEvents } = useQuery<any[]>({
     queryKey: ['adminAgendaEvents'],
     queryFn: () => api.fetchAgendaEvents(),
-    enabled: !!user && !!user.id && !!auth.currentUser && (user?.role === 'admin' || user?.role === 'teacher'),
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && (user?.role === 'admin' || user?.role === 'teacher'),
   });
 
   const { 
@@ -61,7 +61,7 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   } = useQuery<TopicRequest[]>({
     queryKey: ['topicRequests'],
     queryFn: api.fetchTopicRequests,
-    enabled: !!user && !!user.id && !!auth.currentUser && (user?.role === 'admin' || user?.role === 'teacher'),
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && (user?.role === 'admin' || user?.role === 'teacher'),
   });
 
   const { 
@@ -72,13 +72,13 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   } = useQuery<TutoringRequest[]>({
     queryKey: ['tutoringRequests'],
     queryFn: api.fetchTutoringRequests,
-    enabled: !!user && !!user.id && !!auth.currentUser,
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
   });
 
   const conversationsQueryResult = useQuery<Conversation[]>({
     queryKey: ['conversations', user?.id],
     queryFn: () => api.fetchUserChatsFromFirestore(user!.id),
-    enabled: !!user && !!user.id && !!auth.currentUser && (user.role === 'admin' || user.role === 'teacher'),
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && (user.role === 'admin' || user.role === 'teacher'),
     staleTime: 30000,
   });
 
@@ -102,7 +102,7 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   } = useQuery<CourseGroupConversation[]>({
     queryKey: ['group-conversations', user?.id],
     queryFn: () => api.fetchCourseGroupConversations(user!.id),
-    enabled: !!user && !!user.id && !!auth.currentUser && (user.role === 'admin' || user.role === 'teacher'),
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && (user.role === 'admin' || user.role === 'teacher'),
     staleTime: 30000,
   });
 
@@ -113,7 +113,7 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   } = useQuery<TeacherPayment[]>({
     queryKey: ['adminTeacherPaymentsNotifications'],
     queryFn: () => api.fetchTeacherPayments(),
-    enabled: !!user && !!user.id && !!auth.currentUser && user?.role === 'admin',
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user?.role === 'admin',
   });
 
   const {
@@ -122,7 +122,7 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
   } = useQuery<StudentPayment[]>({
     queryKey: ['adminStudentPaymentsNotifications'],
     queryFn: () => api.fetchStudentPayments(),
-    enabled: !!user && !!user.id && !!auth.currentUser && user?.role === 'admin',
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user?.role === 'admin',
   });
 
   // --- REAL-TIME EVENT LISTENERS ---

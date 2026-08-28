@@ -72,7 +72,7 @@ export const StudentTutoringProgressChart: React.FC<StudentTutoringProgressChart
     const { data: tutoringRequests = [], refetch } = useQuery<TutoringRequest[]>({
         queryKey: ['tutoringRequests'],
         queryFn: api.fetchTutoringRequests,
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
 
     // Filter tutoring requests for current student

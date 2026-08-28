@@ -1,5 +1,6 @@
 import React, { useContext, useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { auth } from '../../services/firebase';
 import { useNavigate } from 'react-router-dom';
 import * as api from '../../services/api';
 import { TeacherUser, StudentUser, Conversation } from '../../types';
@@ -123,7 +124,7 @@ export const AdminTeacherApprovalPage: React.FC<AdminTeacherApprovalPageProps> =
     const { data: conversations } = useQuery<Conversation[]>({
         queryKey: ['conversations', user?.id],
         queryFn: () => user?.id ? api.fetchUserChatsFromFirestore(user.id) : Promise.resolve([]),
-        enabled: !!user?.id
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid
     });
 
     // Mutations

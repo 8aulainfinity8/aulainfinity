@@ -1320,44 +1320,19 @@ export const syncCloseSupportConversationInFirestore = async (conversationId: st
     
     const workPromise = (async () => {
         try {
-            if (closedBy === 'student') {
-                try {
-                    const resolved = resolveConversationMetadata(conversationId, { studentId });
-                    const cleanConvoId = resolved.normalizedId || (conversationId || '').replace(/^direct_/, '').replace(/^support_/, '').replace(/^peer_/, '');
-                    const cleanStudentId = resolved.studentId || (studentId || '').replace(/^direct_/, '').replace(/^support_/, '').replace(/^peer_/, '');
-                    
-                    const payload = {
-                        status: 'resolved',
-                        closed: true,
-                        closedBy: 'student',
-                        closedAt: serverTimestamp(),
-                        updatedAt: serverTimestamp()
-                    };
-                    
-                    // Students only have update permissions for support_* chat documents, not raw IDs
-                    const targetIds = Array.from(new Set([
-                        conversationId,
-                        `support_${cleanConvoId}`,
-                        `support_${cleanStudentId}`
-                    ].filter(Boolean)));
-                    
-                    await Promise.all(targetIds.map(async (id) => {
-                        await safeSetDoc(doc(db, 'firestore_conversations', id), payload, { merge: true }).catch(() => {});
-                        await safeSetDoc(doc(db, 'chats', id), payload, { merge: true }).catch(() => {});
-                    }));
-                } catch (e) {
-                    // Silently ignore student soft-close errors/warnings in client logs
-                }
-                return;
-            }
-
             const resolved = resolveConversationMetadata(conversationId, { studentId });
             const cleanConvoId = resolved.normalizedId || (conversationId || '').replace(/^direct_/, '').replace(/^support_/, '').replace(/^peer_/, '');
             const cleanStudentId = resolved.studentId || (studentId || '').replace(/^direct_/, '').replace(/^support_/, '').replace(/^peer_/, '');
             const teacherUid = auth.currentUser?.uid;
 
-            // Specific variation IDs only matching this exact active conversation to avoid wide scans
-            const rawTargetIds = [
+            const isStudentRole = closedBy === 'student' || (teacherUid && teacherUid === cleanStudentId);
+
+            // Specific variation IDs matching this exact active conversation
+            const rawTargetIds = isStudentRole ? [
+                conversationId,
+                `support_${cleanConvoId}`,
+                `support_${cleanStudentId}`
+            ] : [
                 conversationId,
                 `direct_${cleanConvoId}`,
                 `support_${cleanConvoId}`,
@@ -1368,7 +1343,7 @@ export const syncCloseSupportConversationInFirestore = async (conversationId: st
                 cleanConvoId
             ];
             
-            if (teacherUid && cleanStudentId) {
+            if (!isStudentRole && teacherUid && cleanStudentId) {
                 rawTargetIds.push(`direct_${cleanStudentId}_${teacherUid}`);
                 rawTargetIds.push(`direct_${teacherUid}_${cleanStudentId}`);
                 rawTargetIds.push(`${cleanStudentId}_${teacherUid}`);
@@ -1443,10 +1418,7 @@ export const syncCloseSupportConversationInFirestore = async (conversationId: st
                 fetchPromises.push(
                     getDocs(collection(db, 'chats', id, 'messages'))
                         .then(snap => snap?.docs || [])
-                        .catch((err) => {
-                            console.error(`[firestoreSync] Error fetching messages for chat ${id}:`, err);
-                            return [];
-                        })
+                        .catch(() => [])
                 );
                 fetchPromises.push(
                     getDocs(collection(db, 'chats', id, 'signal', 'callData', 'candidates'))

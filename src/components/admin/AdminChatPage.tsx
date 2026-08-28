@@ -523,7 +523,7 @@ export const AdminChatPage: React.FC = () => {
     const { data: peerConversations } = useQuery({
         queryKey: ['peerConversations'],
         queryFn: api.fetchAllPeerConversations,
-        enabled: activeTab === 'peer',
+        enabled: activeTab === 'peer' && !!user && !!user.id && user.id === auth?.currentUser?.uid,
         staleTime: 30000
     });
 
@@ -531,7 +531,7 @@ export const AdminChatPage: React.FC = () => {
     const { data: peerMessages, isLoading: isPeerMessagesLoading } = useQuery({
         queryKey: ['peerMessages', selectedConversationId],
         queryFn: () => api.fetchPeerMessages(selectedConversationId!),
-        enabled: activeTab === 'peer' && !!selectedConversationId,
+        enabled: activeTab === 'peer' && !!selectedConversationId && !!user && !!user.id && user.id === auth?.currentUser?.uid,
         staleTime: 30000
     });
 
@@ -539,14 +539,14 @@ export const AdminChatPage: React.FC = () => {
     const { data: teacherMessages, isLoading: isTeacherMessagesLoading } = useQuery({
         queryKey: ['teacherMessages', selectedConversationId],
         queryFn: () => api.fetchTeacherMessages(selectedConversationId || 'sala_profesores_coordinacion'),
-        enabled: activeTab === 'teacher',
+        enabled: activeTab === 'teacher' && !!user && !!user.id && user.id === auth?.currentUser?.uid,
         staleTime: 30000
     });
 
     const { data: allTeacherMessages } = useQuery({
         queryKey: ['teacherMessages', 'ALL'],
         queryFn: () => api.fetchTeacherMessages('ALL'),
-        enabled: activeTab === 'teacher',
+        enabled: activeTab === 'teacher' && !!user && !!user.id && user.id === auth?.currentUser?.uid,
         staleTime: 30000
     });
 
@@ -692,7 +692,7 @@ export const AdminChatPage: React.FC = () => {
     const { data: courses } = useQuery({
         queryKey: ['courses'],
         queryFn: api.fetchCourses,
-        enabled: activeTab === 'group' || activeTab === 'whiteboard'
+        enabled: (activeTab === 'group' || activeTab === 'whiteboard') && !!user && !!user.id && user.id === auth?.currentUser?.uid
     });
 
     const groupConversations = useMemo(() => {
@@ -717,7 +717,7 @@ export const AdminChatPage: React.FC = () => {
     const { data: teachers } = useQuery({
         queryKey: ['teachers'],
         queryFn: api.fetchTeachers,
-        enabled: !!user && !!user.id && !!auth.currentUser
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid
     });
 
     // Filter conversations for teachers: show conversations of students assigned to this teacher or unassigned
@@ -807,12 +807,16 @@ export const AdminChatPage: React.FC = () => {
 
             return assignedStudents.map(student => {
                 const studentUid = resolveUserUid(student);
-                const canonicalId = `support_${studentUid}`;
+                const canonicalId = user?.role === 'teacher' && user?.id
+                    ? getDirectChatId(studentUid, user.id)
+                    : `support_${studentUid}`;
 
                 const existingConvo = (conversations || []).find(c => {
                     if (!c || !c.id) return false;
                     return (
                         c.id === canonicalId ||
+                        c.id === `support_${studentUid}` ||
+                        (user?.id && c.id === getDirectChatId(studentUid, user.id)) ||
                         c.id === studentUid ||
                         c.studentId === studentUid ||
                         c.id.replace(/^support_/, '') === studentUid ||
@@ -821,7 +825,7 @@ export const AdminChatPage: React.FC = () => {
                     );
                 });
 
-                const finalConvoId = canonicalId;
+                const finalConvoId = existingConvo?.id || canonicalId;
 
                 return {
                     id: finalConvoId,
@@ -884,8 +888,16 @@ export const AdminChatPage: React.FC = () => {
             if (location.state?.activeChatType) {
                 setActiveTab(location.state.activeChatType);
             }
+            if ((location.state as any)?.activeConvoId) {
+                setSelectedConversationId((location.state as any).activeConvoId);
+                setSearchParams({}, { replace: true });
+                return;
+            }
             const studentUid = resolveUserUid(studentQueryId);
-            const canonicalId = `support_${studentUid}`;
+            let canonicalId = `support_${studentUid}`;
+            if (isTeacher && user?.id) {
+                canonicalId = getDirectChatId(studentUid, user.id);
+            }
             setSelectedConversationId(canonicalId);
             setSearchParams({}, { replace: true });
         }

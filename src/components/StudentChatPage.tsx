@@ -369,7 +369,7 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
     const { data: friends = [], isLoading: loadingFriends } = useQuery<StudentFriend[]>({
         queryKey: ['peer-friends', studentId],
         queryFn: () => api.fetchStudentFriends(studentId),
-        enabled: !!user && !!user.id && !!auth.currentUser && !!studentId,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && !!studentId,
     });
 
     useEffect(() => {
@@ -396,7 +396,7 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
     const { data: conversations = [], isLoading: loadingConversations } = useQuery<StudentPeerConversation[]>({
         queryKey: ['peer-conversations', studentId],
         queryFn: () => api.fetchUserPeerChatsFromFirestore(studentId),
-        enabled: !!user && !!user.id && !!auth.currentUser && !!studentId,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && !!studentId,
         staleTime: 30000,
     });
 
@@ -404,7 +404,7 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
     const { data: groupConversations = [], isLoading: loadingGroupConversations } = useQuery<CourseGroupConversation[]>({
         queryKey: ['group-conversations', studentId],
         queryFn: () => api.fetchCourseGroupConversations(studentId),
-        enabled: !!user && !!user.id && !!auth.currentUser && !!studentId,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && !!studentId,
         staleTime: 30000,
     });
 
@@ -412,7 +412,7 @@ export const StudentChatPage: React.FC<StudentChatPageProps> = ({ initialTab }) 
     const { data: classmatesOfSameLevel = [], isLoading: loadingClassmates } = useQuery({
         queryKey: ['classmates-same-level', studentId],
         queryFn: () => api.fetchClassmatesOfSameLevel(studentId),
-        enabled: !!user && !!user.id && !!auth.currentUser && !!studentId,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && !!studentId,
     });
 
     // Helper to verify if a conversation or board ID belongs to current student

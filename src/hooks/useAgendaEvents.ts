@@ -21,7 +21,7 @@ export const useAgendaEvents = () => {
     const { data: events = [], isLoading } = useQuery<ExamEvent[]>({
         queryKey: ['agendaEvents', user?.id, user?.role],
         queryFn: () => api.fetchAgendaEvents(user?.role === 'admin' ? undefined : user!.id),
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
 
     const deleteMutation = useMutation({

@@ -92,12 +92,12 @@ export const StudentProgressPage: React.FC = () => {
     const { data: courses, isLoading: coursesLoading } = useQuery<CourseLevel[]>({ 
         queryKey: ['courses'], 
         queryFn: api.fetchCourses,
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
     const { data: studentAnswers, isLoading: answersLoading } = useQuery<StudentAnswer[]>({
         queryKey: ['studentAnswers', user?.id],
         queryFn: () => api.fetchStudentAnswers(user!.id),
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
     
     const enrolledCourses = useMemo(() => {

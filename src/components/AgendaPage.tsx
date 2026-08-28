@@ -2,6 +2,7 @@
 import React, { useMemo, useState, useContext, useEffect } from 'react';
 import { CalendarDays } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { auth } from '../services/firebase';
 import { useForm, SubmitHandler } from 'react-hook-form';
 import { marked } from 'marked';
 
@@ -1628,7 +1629,7 @@ export const AgendaPage: React.FC = () => {
     const { data: teachers = [] } = useQuery({
         queryKey: ['teachers'],
         queryFn: api.fetchTeachers,
-        enabled: !!user,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
 
     const filteredTutorings = useMemo(() => {

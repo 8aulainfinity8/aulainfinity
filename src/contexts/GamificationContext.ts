@@ -23,12 +23,12 @@ export const GamificationProvider: React.FC<{ children: ReactNode }> = ({ childr
     const { data: courses } = useQuery<CourseLevel[]>({ 
         queryKey: ['courses'], 
         queryFn: api.fetchCourses,
-        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user.role === 'student',
     });
     const { data: studentAnswers } = useQuery<StudentAnswer[]>({
         queryKey: ['studentAnswers', user?.id],
         queryFn: () => api.fetchStudentAnswers(user!.id),
-        enabled: !!user && !!user.id && !!auth.currentUser && user.role === 'student',
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user.role === 'student',
     });
 
     const [knownBadges, setKnownBadges] = useState<Set<string>>(() => {

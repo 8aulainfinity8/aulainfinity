@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useContext, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { auth } from '../../services/firebase';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as api from '../../services/api';
 import type { StudentUser, CourseLevel, StudentAnswer, Video } from '../../types';
@@ -48,7 +49,7 @@ const StudentDetailsModal: React.FC<{
     const { data: answers, isLoading: answersLoading } = useQuery<StudentAnswer[]>({
         queryKey: ['studentAnswers', user.id],
         queryFn: () => api.fetchStudentAnswers(user.id),
-        enabled: !!user.id,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
 
     // Extract watched video details grouped by subject and level

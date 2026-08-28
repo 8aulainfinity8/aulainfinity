@@ -16,7 +16,7 @@ export const NewCommentsProvider: React.FC<{ children: ReactNode }> = ({ childre
   const { data: comments, isLoading, isError, refetch } = useQuery<Comment[]>({
     queryKey: ['allComments'],
     queryFn: api.fetchAllComments,
-    enabled: !!user && !!user.id && !!auth.currentUser && user?.role === 'admin',
+    enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid && user?.role === 'admin',
   });
 
   // Listen for real-time comment updates instead of polling

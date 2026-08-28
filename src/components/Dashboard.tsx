@@ -1486,19 +1486,19 @@ export const StudentDashboard: React.FC = () => {
     const { data: courses = [], isLoading: coursesLoading } = useQuery<CourseLevel[]>({
         queryKey: ['courses'],
         queryFn: api.fetchCourses,
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
     
     const { data: events = [] } = useQuery<ExamEvent[]>({
         queryKey: ['agendaEvents', user?.id],
         queryFn: () => api.fetchAgendaEvents(user!.id),
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
 
     const { data: studentAnswers = [] } = useQuery<StudentAnswer[]>({
         queryKey: ['studentAnswers', user?.id],
         queryFn: () => api.fetchStudentAnswers(user!.id),
-        enabled: !!user && !!user.id && !!auth.currentUser,
+        enabled: !!user && !!user.id && user.id === auth?.currentUser?.uid,
     });
 
     const videoMap = useMemo(() => {
