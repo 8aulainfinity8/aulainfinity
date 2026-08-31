@@ -1,14 +1,15 @@
 import { initializeApp, getApps } from "firebase/app";
 import { 
   initializeFirestore, 
+  persistentLocalCache,
+  persistentMultipleTabManager,
   enableNetwork, 
   doc, 
   getDocFromServer, 
   setDoc, 
   addDoc, 
   updateDoc, 
-  deleteDoc,
-  enableMultiTabIndexedDbPersistence
+  deleteDoc
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getFunctions } from "firebase/functions";
@@ -66,9 +67,11 @@ console.log('[FB_TRANSPORT_CONFIG]', {
   timestamp: Date.now()
 });
 
-// Inicializa Firestore con auto-detección de Long Polling para proxies y entornos sandbox
+// Inicializa Firestore con cache local persistente y configuración de transporte estable
 const firestoreSettings = {
-  experimentalAutoDetectLongPolling: true,
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager()
+  })
 };
 
 export const db = databaseId 
@@ -112,20 +115,6 @@ logAdminEvent('info', 'Inicializando Firebase App', {
   databaseId,
   hasApiKey: Boolean(firebaseConfig.apiKey)
 });
-
-if (typeof window !== 'undefined') {
-  enableMultiTabIndexedDbPersistence(db)
-    .then(() => logAdminEvent('info', '📦 Persistencia offline multidestello habilitada en Firestore'))
-    .catch((err) => {
-      if (err.code === 'failed-precondition') {
-        logAdminEvent('warn', '⚠️ Persistencia offline de Firestore falló por precondición (multi-tab):', err);
-      } else if (err.code === 'unimplemented') {
-        logAdminEvent('warn', '⚠️ El navegador actual no soporta persistencia offline de Firestore:', err);
-      } else {
-        logAdminEvent('warn', '⚠️ Error habilitando persistencia offline:', err);
-      }
-    });
-}
 
 import { getF11045Meta } from '../utils/f11045';
 

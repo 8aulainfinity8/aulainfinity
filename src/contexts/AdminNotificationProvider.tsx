@@ -182,16 +182,38 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
           if (!convoId) return;
 
           const isUnread = payload.read ? false : (payload.senderId !== user.id);
+          const unreadAdmin = payload.read ? false : (payload.unreadByAdmin !== undefined ? payload.unreadByAdmin : (user.role === 'admin' ? isUnread : false));
+          const unreadTeacher = payload.read ? false : (payload.unreadByTeacher !== undefined ? payload.unreadByTeacher : (user.role === 'teacher' ? isUnread : false));
+          const groupUnread = payload.read ? false : (payload.unreadByUserId?.[user.id] !== undefined ? payload.unreadByUserId[user.id] : isUnread);
 
           // Update private/support conversations cache
           queryClient.setQueryData(['conversations', user.id], (oldData: Conversation[] | undefined) => {
              if (!oldData) return oldData;
+             const exists = oldData.some(c => c.id === convoId);
+             if (!exists && !payload.closed) {
+               return [
+                 ...oldData,
+                 {
+                   id: convoId,
+                   studentId: payload.studentId || '',
+                   studentName: payload.studentName || 'Alumno',
+                   teacherId: payload.teacherId,
+                   teacherName: payload.teacherName,
+                   lastMessageText: payload.read ? '' : (payload.lastMessageText || payload.text || payload.lastMessage || ''),
+                   lastMessageTimestamp: payload.read ? new Date().toISOString() : (payload.lastMessageTimestamp || payload.timestamp || new Date().toISOString()),
+                   unreadByAdmin: unreadAdmin,
+                   unreadByTeacher: unreadTeacher,
+                   unreadByStudent: payload.unreadByStudent ?? false,
+                   ...payload
+                 }
+               ];
+             }
              return oldData.map(c => c.id === convoId ? { 
                ...c, 
-               lastMessageText: payload.read ? c.lastMessageText : (payload.text || c.lastMessageText), 
-               lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.timestamp || c.lastMessageTimestamp),
-               unreadByAdmin: user.role === 'admin' ? isUnread : c.unreadByAdmin,
-               unreadByTeacher: user.role === 'teacher' ? isUnread : c.unreadByTeacher
+               lastMessageText: payload.read ? c.lastMessageText : (payload.lastMessageText || payload.text || payload.lastMessage || c.lastMessageText), 
+               lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.lastMessageTimestamp || payload.timestamp || c.lastMessageTimestamp),
+               unreadByAdmin: payload.unreadByAdmin !== undefined ? payload.unreadByAdmin : (user.role === 'admin' ? isUnread : c.unreadByAdmin),
+               unreadByTeacher: payload.unreadByTeacher !== undefined ? payload.unreadByTeacher : (user.role === 'teacher' ? isUnread : c.unreadByTeacher)
              } : c);
           });
 
@@ -200,11 +222,11 @@ export const AdminNotificationProvider: React.FC<{ children: ReactNode }> = ({ c
             if (!oldData) return oldData;
             return oldData.map(c => c.id === convoId ? {
               ...c,
-              lastMessageText: payload.read ? c.lastMessageText : (payload.text || c.lastMessageText),
-              lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.timestamp || c.lastMessageTimestamp),
+              lastMessageText: payload.read ? c.lastMessageText : (payload.lastMessageText || payload.text || payload.lastMessage || c.lastMessageText),
+              lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.lastMessageTimestamp || payload.timestamp || c.lastMessageTimestamp),
               unreadByUserId: {
                 ...c.unreadByUserId,
-                [user.id]: isUnread
+                [user.id]: groupUnread
               }
             } : c);
           });

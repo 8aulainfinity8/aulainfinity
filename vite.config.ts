@@ -26,7 +26,30 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    chunkSizeWarningLimit: 2000,
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks: (id) => {
+          if (id.includes('node_modules')) {
+            if (id.includes('firebase') || id.includes('@firebase')) {
+              return 'vendor-firebase';
+            }
+            if (id.includes('jspdf') || id.includes('html2canvas')) {
+              return 'vendor-export';
+            }
+            if (id.includes('marked') || id.includes('dompurify')) {
+              return 'vendor-markdown';
+            }
+            if (id.includes('recharts') || id.includes('d3')) {
+              return 'vendor-charts';
+            }
+            if (id.includes('lucide-react') || id.includes('motion')) {
+              return 'vendor-ui';
+            }
+          }
+        },
+      },
+    },
   },
   test: {
     globals: true,

@@ -17,6 +17,7 @@ import {
 import { db, auth } from '../services/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { listenerTracker } from '../services/listenerTracker';
+import { eventEmitter } from '../services/eventService';
 import * as api from '../services/api';
 import * as dbMock from '../services/mockDatabase';
 import {
@@ -248,7 +249,8 @@ export function useChat(
   // Marcar como leído los mensajes de la conversación actual
   const markAsRead = useCallback(async () => {
     if (!chatId || !resolvedUserId) return;
-    if (!auth?.currentUser || !auth.currentUser.emailVerified) return;
+    const isAuthed = Boolean(auth?.currentUser && (auth.currentUser.emailVerified || firebaseRole === 'admin' || firebaseRole === 'teacher'));
+    if (!isAuthed) return;
 
     try {
       // 1. ACTUALIZACIÓN OPTIMISTA DE CACHÉ (inmediata)
@@ -274,13 +276,51 @@ export function useChat(
             return c;
           });
         });
+
+        queryClient.setQueryData(['peer-conversations', resolvedUserId], (oldData: any[] | undefined) => {
+          if (!oldData) return oldData;
+          return oldData.map(c => c.id === chatId ? {
+            ...c,
+            unreadByStudentId: {
+              ...c.unreadByStudentId,
+              [resolvedUserId]: false
+            }
+          } : c);
+        });
+
+        queryClient.setQueryData(['group-conversations', resolvedUserId], (oldData: any[] | undefined) => {
+          if (!oldData) return oldData;
+          return oldData.map(c => c.id === chatId ? {
+            ...c,
+            unreadByUserId: {
+              ...c.unreadByUserId,
+              [resolvedUserId]: false
+            }
+          } : c);
+        });
       }
+
+      eventEmitter.emit('message-update', { 
+        conversationId: chatId, 
+        read: true, 
+        unreadByAdmin: firebaseRole === 'admin' ? false : undefined,
+        unreadByTeacher: firebaseRole === 'teacher' ? false : undefined,
+        unreadByStudent: firebaseRole === 'student' ? false : undefined
+      });
+      eventEmitter.emit('direct-message-update', { 
+        conversationId: chatId, 
+        read: true,
+        unreadByAdmin: firebaseRole === 'admin' ? false : undefined,
+        unreadByTeacher: firebaseRole === 'teacher' ? false : undefined,
+        unreadByStudent: firebaseRole === 'student' ? false : undefined
+      });
 
       // 2. ACTUALIZACIÓN EN FIRESTORE
       const chatRef = doc(db, 'chats', chatId);
       const updatePayload: Record<string, any> = {
         [`unreadCount.${resolvedUserId}`]: 0,
-        [`unreadByStudentId.${resolvedUserId}`]: false
+        [`unreadByStudentId.${resolvedUserId}`]: false,
+        [`unreadByUserId.${resolvedUserId}`]: false
       };
 
       const role = firebaseRole;

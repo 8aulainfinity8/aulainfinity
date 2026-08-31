@@ -5,7 +5,7 @@ import * as api from '../services/api';
 import type { CourseLevel, Video } from '../types';
 import { generateVideoPath } from '../constants/routes';
 import { EmptyState } from './ui/EmptyState';
-import { getVideoDifficulty } from './CoursePage';
+import { getVideoDifficulty } from '../utils/courseUtils';
 import { AuthContext } from '../contexts/AuthContext';
 import { filterCoursesForTeacher } from '../utils/teacherPermissions';
 import { 

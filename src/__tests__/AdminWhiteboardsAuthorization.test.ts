@@ -13,10 +13,12 @@ vi.mock('firebase/firestore', () => ({
     doc: vi.fn(),
     setDoc: vi.fn(),
     getDoc: vi.fn(),
+    persistentLocalCache: vi.fn(),
+    persistentMultipleTabManager: vi.fn(),
     enableMultiTabIndexedDbPersistence: vi.fn().mockResolvedValue(undefined)
 }));
 
-vi.mock('../../services/firebase', () => ({
+vi.mock('../services/firebase', () => ({
     db: {},
     auth: {
         currentUser: null

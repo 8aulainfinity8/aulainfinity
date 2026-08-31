@@ -25,14 +25,9 @@ import { ChatRoom } from './chat/ChatRoom';
 import { ChatHeader } from './chat/ChatHeader';
 import { IncomingCallModal } from './chat/IncomingCallModal';
 
-export const ChatPage: React.FC = () => {
+export const StudentChatView: React.FC = () => {
     const { user } = useContext(AuthContext);
     const { addToast } = useContext(NotificationContext);
-
-    // If the logged-in user is a teacher, show the teacher-adapted chat interface of AdminChatPage
-    if (user?.role === 'teacher') {
-        return <AdminChatPage />;
-    }
 
     const queryClient = useQueryClient();
     const handleBack = useBackNavigation();
@@ -462,4 +457,14 @@ export const ChatPage: React.FC = () => {
             </div>
         </SubscriptionGate>
     );
+};
+
+export const ChatPage: React.FC = () => {
+    const { user } = useContext(AuthContext);
+
+    if (user?.role === 'teacher') {
+        return <AdminChatPage />;
+    }
+
+    return <StudentChatView />;
 };

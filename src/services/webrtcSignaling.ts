@@ -326,6 +326,42 @@ export function bindStreamToAudioElement(stream: MediaStream, audioElement?: HTM
     return audioEl;
 }
 
+async function ensureWebRTCAuth(): Promise<void> {
+    if (auth?.currentUser) {
+        try {
+            await auth.currentUser.getIdToken(true);
+        } catch (e) {
+            console.warn('[WebRTC Auth] Token refresh note:', e);
+        }
+        return;
+    }
+    
+    if (auth) {
+        await new Promise<void>((resolve) => {
+            const unsub = auth.onAuthStateChanged((u) => {
+                if (u) {
+                    unsub();
+                    resolve();
+                }
+            });
+            setTimeout(() => {
+                unsub();
+                resolve();
+            }, 1000);
+        });
+
+        if (!auth.currentUser) {
+            try {
+                const { signInAnonymously } = await import('firebase/auth');
+                await signInAnonymously(auth);
+                console.log('[WebRTC Auth] Fallback anonymous sign-in completed');
+            } catch (e) {
+                console.warn('[WebRTC Auth] Anonymous fallback sign-in note:', e);
+            }
+        }
+    }
+}
+
 /**
  * 1. createCall(roomId, remoteAudioElement): Initiates a WebRTC voice call as the Caller.
  */
@@ -334,9 +370,11 @@ export async function createCall(
     remoteAudioElement?: HTMLAudioElement | null,
     onDisconnectCallback?: (reason: string) => void
 ): Promise<WebRTCCallSession> {
-    const currentUser = auth.currentUser;
-    const callerUid = currentUser ? currentUser.uid : `anon_${Math.random().toString(36).substring(2, 7)}`;
-    const callerEmail = currentUser?.email || 'Guest User';
+    await ensureWebRTCAuth();
+
+    let currentUser = auth?.currentUser;
+    let callerUid = currentUser ? currentUser.uid : `anon_${Math.random().toString(36).substring(2, 7)}`;
+    let callerEmail = currentUser?.email || 'Profesor / Usuario';
 
     // 1. Get local mic media stream
     const localStream = await getLocalAudioStream();
@@ -456,7 +494,20 @@ export async function createCall(
         answer: deleteField()
     };
 
-    await setDoc(roomRef, roomWithOffer, { merge: true });
+    try {
+        await setDoc(roomRef, roomWithOffer, { merge: true });
+    } catch (writeErr: any) {
+        console.warn('[WebRTC Caller] Initial setDoc failed, attempting auth refresh and retry:', writeErr?.message);
+        await ensureWebRTCAuth();
+        if (auth?.currentUser) {
+            currentUser = auth.currentUser;
+            callerUid = currentUser.uid;
+            callerEmail = currentUser.email || callerEmail;
+            roomWithOffer.callerUid = callerUid;
+            roomWithOffer.callerEmail = callerEmail;
+        }
+        await setDoc(roomRef, roomWithOffer, { merge: true });
+    }
 
     // 5. Listen for Callee's SDP Answer on /rooms/{roomId}
     const unsubRoom = onSnapshot(roomRef, async (snapshot) => {
@@ -583,9 +634,11 @@ export async function joinCall(
     remoteAudioElement?: HTMLAudioElement | null,
     onDisconnectCallback?: (reason: string) => void
 ): Promise<WebRTCCallSession> {
+    await ensureWebRTCAuth();
+
     const currentUser = auth.currentUser;
     const calleeUid = currentUser ? currentUser.uid : `anon_${Math.random().toString(36).substring(2, 7)}`;
-    const calleeEmail = currentUser?.email || 'Guest User';
+    const calleeEmail = currentUser?.email || 'Alumno / Participante';
 
     const roomRef = doc(db, 'rooms', roomId);
     const roomSnapshot = await getDoc(roomRef);
@@ -714,7 +767,13 @@ export async function joinCall(
         updatedAt: serverTimestamp()
     };
 
-    await updateDoc(roomRef, roomAnswer);
+    try {
+        await updateDoc(roomRef, roomAnswer);
+    } catch (writeErr: any) {
+        console.warn('[WebRTC Callee] Initial updateDoc failed, attempting auth refresh and retry:', writeErr?.message);
+        await ensureWebRTCAuth();
+        await updateDoc(roomRef, roomAnswer);
+    }
 
     // 6. Listen for Caller's ICE candidates on /rooms/{roomId}/callerCandidates
     const unsubCallerCandidates = onSnapshot(callerCandidatesCol, (snapshot) => {

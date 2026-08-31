@@ -128,6 +128,11 @@ export const RealtimeAlertsBanner: React.FC = () => {
     const isRoomForUser = useCallback((roomId?: string) => {
         if (!user || !roomId) return false;
 
+        // Exception for teachers coordination room
+        if (roomId === 'room_sala_profesores_coordinacion' || roomId === 'sala_profesores_coordinacion') {
+            return user?.role === 'teacher' || user?.role === 'admin';
+        }
+
         // 1. If it's a private student-to-student peer chat or student study group:
         const resolved = resolveConversationMetadata(roomId);
         if (resolved.type === 'peer' || roomId.startsWith('studygroup_')) {
@@ -318,9 +323,10 @@ export const RealtimeAlertsBanner: React.FC = () => {
                 });
             }, (err) => console.warn('Firestore active voice rooms listener (admin):', err.message));
             unsubs.push(unsub);
-        } else if (actualIsApprovedTeacher) {
-            // Approved Teacher: listeners individuales por cada curso asignado
-            const taughtCourseIds = getTeacherAssignedLevels(user as any);
+        } else if (actualIsApprovedTeacher || user.role === 'teacher') {
+            // Teachers: listeners individuales por cada curso asignado + sala_profesores_coordinacion
+            const baseAssigned = actualIsApprovedTeacher ? getTeacherAssignedLevels(user as any) : [];
+            const taughtCourseIds = Array.from(new Set([...baseAssigned, 'sala_profesores_coordinacion']));
             if (taughtCourseIds.length > 0) {
                 const activeRoomsMap = new Map<string, ActiveVoiceRoom>();
                 taughtCourseIds.forEach((courseId: string) => {

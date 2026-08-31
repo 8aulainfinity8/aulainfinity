@@ -152,15 +152,36 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
             const convoId = payload?.conversationId || payload?.courseId;
             if (!convoId) return;
 
-            const isUnread = payload.read ? false : (payload.senderId !== user.id);
+            const isUnread = payload.read ? false : (payload.unreadByStudent !== undefined ? payload.unreadByStudent : (payload.senderId !== user.id));
+            const peerUnread = payload.read ? false : (payload.unreadByStudentId?.[user.id] !== undefined ? payload.unreadByStudentId[user.id] : isUnread);
+            const groupUnread = payload.read ? false : (payload.unreadByUserId?.[user.id] !== undefined ? payload.unreadByUserId[user.id] : isUnread);
 
             // Update support/private conversations
             queryClient.setQueryData(['conversations', user.id], (oldData: Conversation[] | undefined) => {
                 if (!oldData) return oldData;
+                const exists = oldData.some(c => c.id === convoId);
+                if (!exists && !payload.closed) {
+                    return [
+                        ...oldData,
+                        {
+                            id: convoId,
+                            studentId: payload.studentId || user.id,
+                            studentName: payload.studentName || user.name || 'Estudiante',
+                            teacherId: payload.teacherId,
+                            teacherName: payload.teacherName,
+                            lastMessageText: payload.read ? '' : (payload.lastMessageText || payload.text || payload.lastMessage || ''),
+                            lastMessageTimestamp: payload.read ? new Date().toISOString() : (payload.lastMessageTimestamp || payload.timestamp || new Date().toISOString()),
+                            unreadByStudent: isUnread,
+                            unreadByTeacher: payload.unreadByTeacher ?? false,
+                            unreadByAdmin: payload.unreadByAdmin ?? false,
+                            ...payload
+                        }
+                    ];
+                }
                 return oldData.map(c => c.id === convoId ? {
                     ...c,
-                    lastMessageText: payload.read ? c.lastMessageText : (payload.text || c.lastMessageText),
-                    lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.timestamp || c.lastMessageTimestamp),
+                    lastMessageText: payload.read ? c.lastMessageText : (payload.lastMessageText || payload.text || payload.lastMessage || c.lastMessageText),
+                    lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.lastMessageTimestamp || payload.timestamp || c.lastMessageTimestamp),
                     unreadByStudent: isUnread
                 } : c);
             });
@@ -170,11 +191,11 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
                 if (!oldData) return oldData;
                 return oldData.map(c => c.id === convoId ? {
                     ...c,
-                    lastMessageText: payload.read ? c.lastMessageText : (payload.text || c.lastMessageText),
-                    lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.timestamp || c.lastMessageTimestamp),
+                    lastMessageText: payload.read ? c.lastMessageText : (payload.lastMessageText || payload.text || payload.lastMessage || c.lastMessageText),
+                    lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.lastMessageTimestamp || payload.timestamp || c.lastMessageTimestamp),
                     unreadByStudentId: {
                         ...c.unreadByStudentId,
-                        [user.id]: isUnread
+                        [user.id]: peerUnread
                     }
                 } : c);
             });
@@ -184,11 +205,11 @@ export const StudentNotificationProvider: React.FC<{ children: ReactNode }> = ({
                 if (!oldData) return oldData;
                 return oldData.map(c => c.id === convoId ? {
                     ...c,
-                    lastMessageText: payload.read ? c.lastMessageText : (payload.text || c.lastMessageText),
-                    lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.timestamp || c.lastMessageTimestamp),
+                    lastMessageText: payload.read ? c.lastMessageText : (payload.lastMessageText || payload.text || payload.lastMessage || c.lastMessageText),
+                    lastMessageTimestamp: payload.read ? c.lastMessageTimestamp : (payload.lastMessageTimestamp || payload.timestamp || c.lastMessageTimestamp),
                     unreadByUserId: {
                         ...c.unreadByUserId,
-                        [user.id]: isUnread
+                        [user.id]: groupUnread
                     }
                 } : c);
             });

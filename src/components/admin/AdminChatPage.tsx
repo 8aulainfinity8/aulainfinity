@@ -319,6 +319,8 @@ export const AdminChatPage: React.FC = () => {
     const [searchParams, setSearchParams] = useSearchParams();
     const studentQueryId = searchParams.get('studentId');
     const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+    const isCoordinationRoom = selectedConversationId === 'sala_profesores_coordinacion';
+    const canUseVoiceCall = isApprovedTeacher || (isTeacher && isCoordinationRoom);
 
     const handleSelectConversation = (id: string | null) => {
         console.log(`[F110.30] [ADMIN_CHAT_CLICK] | timestamp: ${performance.now()} | newId: ${id}`);
@@ -697,16 +699,19 @@ export const AdminChatPage: React.FC = () => {
 
     const groupConversations = useMemo(() => {
         if (!courses) return [];
-        return courses.map(course => ({
-            id: course.id,
-            studentName: `Grupo ${course.name}`,
-            studentEmail: 'Canal de colaboración grupal del aula',
-            lastMessageText: 'Canal de comunicación del curso',
-            lastMessageTimestamp: new Date().toISOString(),
-            unreadByTeacher: false,
-            unreadByAdmin: false
-        })) as unknown as Conversation[];
-    }, [courses]);
+        return courses.map(course => {
+            const existing = conversations?.find(c => c.id === course.id || c.id === `course_${course.id}`);
+            return {
+                id: course.id,
+                studentName: `Grupo ${course.name}`,
+                studentEmail: 'Canal de colaboración grupal del aula',
+                lastMessageText: existing?.lastMessageText || 'Canal de comunicación del curso',
+                lastMessageTimestamp: existing?.lastMessageTimestamp || new Date().toISOString(),
+                unreadByTeacher: existing?.unreadByTeacher || false,
+                unreadByAdmin: existing?.unreadByAdmin || false
+            };
+        }) as unknown as Conversation[];
+    }, [courses, conversations]);
 
     const [input, setInput] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -844,40 +849,45 @@ export const AdminChatPage: React.FC = () => {
         if (activeTab === 'teacher') {
             const coordMsgs = (allTeacherMessages || teacherMessages || []).filter(m => !m.conversationId || m.conversationId === 'sala_profesores_coordinacion');
             const lastCoordMsg = coordMsgs.length > 0 ? coordMsgs[coordMsgs.length - 1] : null;
+            const coordExisting = conversations?.find(c => c.id === 'sala_profesores_coordinacion');
             const coordRoom = {
                 id: 'sala_profesores_coordinacion',
                 studentName: 'Sala de Coordinación (General)',
                 studentEmail: 'Canal de comunicación grupal entre docentes y administración',
-                lastMessageText: lastCoordMsg ? lastCoordMsg.text : 'Canal activo',
-                lastMessageTimestamp: lastCoordMsg ? lastCoordMsg.timestamp : new Date().toISOString(),
-                unreadByTeacher: false,
-                unreadByAdmin: false
+                lastMessageText: coordExisting?.lastMessageText || (lastCoordMsg ? lastCoordMsg.text : 'Canal activo'),
+                lastMessageTimestamp: coordExisting?.lastMessageTimestamp || (lastCoordMsg ? lastCoordMsg.timestamp : new Date().toISOString()),
+                unreadByTeacher: coordExisting?.unreadByTeacher || false,
+                unreadByAdmin: coordExisting?.unreadByAdmin || false
             };
             const teacherItems = (teachers || []).map(t => {
                 const tMsgs = (allTeacherMessages || []).filter(m => m.conversationId === `teacher_${t.id}`);
                 const lastMsg = tMsgs.length > 0 ? tMsgs[tMsgs.length - 1] : null;
+                const existing = conversations?.find(c => c.id === `teacher_${t.id}`);
                 return {
                     id: `teacher_${t.id}`,
                     studentName: `Docente: ${t.name}`,
                     studentEmail: `${t.email} (${t.category})`,
-                    lastMessageText: lastMsg ? `${lastMsg.senderName}: ${lastMsg.text}` : 'Chat directo de coordinación docente',
-                    lastMessageTimestamp: lastMsg ? lastMsg.timestamp : ((t as any).registrationDate || new Date().toISOString()),
-                    unreadByTeacher: false,
-                    unreadByAdmin: false
+                    lastMessageText: existing?.lastMessageText || (lastMsg ? `${lastMsg.senderName}: ${lastMsg.text}` : 'Chat directo de coordinación docente'),
+                    lastMessageTimestamp: existing?.lastMessageTimestamp || (lastMsg ? lastMsg.timestamp : ((t as any).registrationDate || new Date().toISOString())),
+                    unreadByTeacher: existing?.unreadByTeacher || false,
+                    unreadByAdmin: existing?.unreadByAdmin || false
                 };
             });
             return [coordRoom, ...teacherItems] as unknown as Conversation[];
         }
         if (activeTab === 'whiteboard') {
-            return activeBoards.map(board => ({
-                id: board.id,
-                studentName: getBoardLabel(board.id),
-                studentEmail: `Último cambio por ${board.updatedBy || 'Usuario'}`,
-                lastMessageText: `Pizarra activa desde: ${new Date(board.updatedAt || '').toLocaleTimeString('es-ES')}`,
-                lastMessageTimestamp: board.updatedAt || new Date().toISOString(),
-                unreadByTeacher: false,
-                unreadByAdmin: false
-            })) as unknown as Conversation[];
+            return activeBoards.map(board => {
+                const existing = conversations?.find(c => c.id === board.id);
+                return {
+                    id: board.id,
+                    studentName: getBoardLabel(board.id),
+                    studentEmail: `Último cambio por ${board.updatedBy || 'Usuario'}`,
+                    lastMessageText: `Pizarra activa desde: ${new Date(board.updatedAt || '').toLocaleTimeString('es-ES')}`,
+                    lastMessageTimestamp: board.updatedAt || new Date().toISOString(),
+                    unreadByTeacher: existing?.unreadByTeacher || false,
+                    unreadByAdmin: existing?.unreadByAdmin || false
+                };
+            }) as unknown as Conversation[];
         }
         if (!conversationsToDisplay) return [];
         return [...conversationsToDisplay].sort((a, b) => new Date(b.lastMessageTimestamp).getTime() - new Date(a.lastMessageTimestamp).getTime());
@@ -915,15 +925,16 @@ export const AdminChatPage: React.FC = () => {
             const cleanStudentId = selectedConversationId?.replace(/^support_/, '').replace(/^direct_/, '').split('_')[0];
             const student = (allUsers || []).find(u => u.id === selectedConversationId || u.id === cleanStudentId || selectedConversationId?.includes(u.id));
             if (student) {
+                const existing = conversations?.find(c => c.id === selectedConversationId || c.id === `support_${student.id}`);
                 return {
                     id: selectedConversationId || `support_${student.id}`,
                     studentId: student.id,
                     studentName: student.name,
                     studentEmail: student.email + (student.assignedTeacherName ? ` • Tutor: ${student.assignedTeacherName}` : ''),
-                    lastMessageText: 'Canal directo con alumno asignado',
-                    lastMessageTimestamp: '',
-                    unreadByTeacher: false,
-                    unreadByAdmin: false
+                    lastMessageText: existing?.lastMessageText || 'Canal directo con alumno asignado',
+                    lastMessageTimestamp: existing?.lastMessageTimestamp || '',
+                    unreadByTeacher: existing?.unreadByTeacher || false,
+                    unreadByAdmin: existing?.unreadByAdmin || false
                 } as unknown as Conversation;
             }
             return null;
@@ -932,35 +943,38 @@ export const AdminChatPage: React.FC = () => {
             if (selectedConversationId && selectedConversationId !== 'sala_profesores_coordinacion' && selectedConversationId.startsWith('teacher_')) {
                 const techId = selectedConversationId.replace('teacher_', '');
                 const tech = (teachers || []).find(t => t.id === techId);
+                const existing = conversations?.find(c => c.id === selectedConversationId);
                 return {
                     id: selectedConversationId,
                     studentName: tech ? `Docente: ${tech.name}` : 'Docente',
                     studentEmail: tech ? `${tech.email} (${tech.category})` : 'Canal docente',
-                    lastMessageText: '',
-                    lastMessageTimestamp: '',
-                    unreadByTeacher: false,
-                    unreadByAdmin: false
+                    lastMessageText: existing?.lastMessageText || '',
+                    lastMessageTimestamp: existing?.lastMessageTimestamp || '',
+                    unreadByTeacher: existing?.unreadByTeacher || false,
+                    unreadByAdmin: existing?.unreadByAdmin || false
                 } as unknown as Conversation;
             }
+            const existing = conversations?.find(c => c.id === 'sala_profesores_coordinacion');
             return {
                 id: 'sala_profesores_coordinacion',
                 studentName: 'Sala de Coordinación',
                 studentEmail: 'Canal de comunicación docente',
-                lastMessageText: '',
-                lastMessageTimestamp: '',
-                unreadByTeacher: false,
-                unreadByAdmin: false
+                lastMessageText: existing?.lastMessageText || '',
+                lastMessageTimestamp: existing?.lastMessageTimestamp || '',
+                unreadByTeacher: existing?.unreadByTeacher || false,
+                unreadByAdmin: existing?.unreadByAdmin || false
             } as unknown as Conversation;
         }
         if (activeTab === 'whiteboard') {
+            const existing = conversations?.find(c => c.id === (selectedConversationId || ''));
             return {
                 id: selectedConversationId || '',
                 studentName: getBoardLabel(selectedConversationId || ''),
                 studentEmail: 'Supervisión en vivo',
-                lastMessageText: '',
-                lastMessageTimestamp: '',
-                unreadByTeacher: false,
-                unreadByAdmin: false
+                lastMessageText: existing?.lastMessageText || '',
+                lastMessageTimestamp: existing?.lastMessageTimestamp || '',
+                unreadByTeacher: existing?.unreadByTeacher || false,
+                unreadByAdmin: existing?.unreadByAdmin || false
             } as unknown as Conversation;
         }
         return conversations?.find(c => c.id === selectedConversationId) || null;
@@ -1348,19 +1362,19 @@ export const AdminChatPage: React.FC = () => {
                             <div className="flex items-center flex-wrap gap-1.5 sm:gap-2">
                                 <button
                                     onClick={() => {
-                                        if (!isApprovedTeacher) {
+                                        if (!canUseVoiceCall) {
                                             alert('No tienes luz verde de administración para usar la llamada de voz.');
                                             return;
                                         }
                                         setShowVoiceCall(v => !v);
                                     }}
-                                    disabled={!isApprovedTeacher}
+                                    disabled={!canUseVoiceCall}
                                     className={`px-2.5 py-1.5 sm:px-3 sm:py-1.5 rounded-xl transition-all border flex items-center gap-1.5 text-xs font-bold shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${
                                         showVoiceCall 
                                         ? 'bg-indigo-50 border-indigo-250 text-indigo-700 dark:bg-indigo-950/35 dark:border-indigo-900 dark:text-indigo-400' 
                                         : 'bg-white border-slate-205 text-slate-705 dark:bg-slate-750 dark:border-slate-650 dark:text-slate-300 hover:bg-slate-50 cursor-pointer'
                                     }`}
-                                    title={isApprovedTeacher ? "Llamada de voz" : "Requiere aprobación (luz verde)"}
+                                    title={canUseVoiceCall ? "Llamada de voz" : "Requiere aprobación (luz verde)"}
                                 >
                                     <Phone className="w-4 h-4" />
                                     <span className="hidden sm:inline">Voz</span>
@@ -1368,7 +1382,7 @@ export const AdminChatPage: React.FC = () => {
                                 
                                 <button
                                     onClick={() => {
-                                        if (!isApprovedTeacher) {
+                                        if (!isApprovedTeacher && !isCoordinationRoom) {
                                             alert('No tienes luz verde de administración para usar la pizarra.');
                                             return;
                                         }
@@ -1383,13 +1397,13 @@ export const AdminChatPage: React.FC = () => {
                                             }, { merge: true }).catch(console.error);
                                         }
                                     }}
-                                    disabled={!isApprovedTeacher}
+                                    disabled={!isApprovedTeacher && !isCoordinationRoom}
                                     className={`px-2.5 py-1.5 sm:px-3 sm:py-1.5 rounded-xl transition-all border flex items-center gap-1.5 text-xs font-bold shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${
                                         showWhiteboard 
                                         ? 'bg-indigo-50 border-indigo-255 text-indigo-700 dark:bg-indigo-950/35 dark:border-indigo-900 dark:text-indigo-400' 
                                         : 'bg-white border-slate-205 text-slate-755 dark:bg-slate-750 dark:border-slate-650 dark:text-slate-300 hover:bg-slate-50 cursor-pointer'
                                     }`}
-                                    title={isApprovedTeacher ? "Activar pizarra escolar" : "Requiere aprobación (luz verde)"}
+                                    title={(isApprovedTeacher || isCoordinationRoom) ? "Activar pizarra escolar" : "Requiere aprobación (luz verde)"}
                                 >
                                     <PenTool className="w-4 h-4" />
                                     <span className="hidden sm:inline">Pizarra</span>

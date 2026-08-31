@@ -1,4 +1,4 @@
-import { db, auth, handleFirestoreError, OperationType } from './firebase';
+import { db, auth, functions, handleFirestoreError, OperationType } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { 
     collection, 
@@ -429,22 +429,42 @@ if (currentUserObj?.role === 'admin') {
         // 4.5. Voice / Video Rooms real-time sync is handled with granular authorization in RealtimeAlertsBanner
 
         // 4.6. Direct Conversations Metadata & Unread Badges ("Globos") Sync
-        const conversationsRef = collection(db, 'firestore_conversations');
+        const conversationsRef = collection(db, 'chats');
         let conversationsQuery = conversationsRef as any;
-        if (isStudentRole && currentAuth) conversationsQuery = query(conversationsRef, where('studentId', '==', currentAuth.uid));
-        else if (isTeacherRole && currentAuth) conversationsQuery = query(conversationsRef, where('teacherId', '==', currentAuth.uid));
+        if (isStudentRole && currentAuth) {
+            conversationsQuery = query(conversationsRef, where('participants', 'array-contains', currentAuth.uid));
+        } else if (isTeacherRole && currentAuth) {
+            conversationsQuery = query(conversationsRef, where('participants', 'array-contains', currentAuth.uid));
+        }
         onSnapshot(conversationsQuery, (snapshot: any) => {
             snapshot.docChanges().forEach((change: any) => {
                 const data = change.doc.data() || {};
-                const rawConvoId = data.id || change.doc.id;
+                const rawConvoId = data.id || data.chatId || change.doc.id;
                 const { studentId: parsedStudentId, teacherId: parsedTeacherId } = api.parseConversationParticipants(rawConvoId);
                 const studentId = (data.studentId && data.studentId !== 'direct' ? data.studentId : parsedStudentId) || parsedStudentId;
                 const teacherId = data.teacherId || parsedTeacherId;
-                const convoId = rawConvoId.replace(/^direct_/, '');
+                const convoId = rawConvoId;
 
-                if (!studentId || studentId === 'direct') return;
+                const lastMsg = data.lastMessage || data.lastMessageText || '';
+                const lastTimestamp = data.lastMessageTimestamp?.toDate
+                    ? data.lastMessageTimestamp.toDate().toISOString()
+                    : (typeof data.lastMessageTimestamp === 'string' ? data.lastMessageTimestamp : new Date().toISOString());
 
-                if (dbMock.isConversationClosed(convoId, studentId) || dbMock.isConversationClosed(rawConvoId, studentId)) {
+                const unreadCountMap = data.unreadCount || {};
+                const currentUid = currentAuth?.uid || '';
+                const userUnread = currentUid ? (unreadCountMap[currentUid] || 0) > 0 : false;
+
+                const unreadByAdmin = data.unreadByAdmin !== undefined
+                    ? Boolean(data.unreadByAdmin)
+                    : (currentUserObj?.role === 'admin' ? userUnread : false);
+                const unreadByTeacher = data.unreadByTeacher !== undefined
+                    ? Boolean(data.unreadByTeacher)
+                    : (currentUserObj?.role === 'teacher' ? userUnread : false);
+                const unreadByStudent = data.unreadByStudent !== undefined
+                    ? Boolean(data.unreadByStudent)
+                    : (currentUserObj?.role === 'student' ? userUnread : false);
+
+                if (studentId && dbMock.isConversationClosed && (dbMock.isConversationClosed(convoId, studentId) || dbMock.isConversationClosed(rawConvoId, studentId))) {
                     if (dbMock.conversationsData) {
                         for (let i = dbMock.conversationsData.length - 1; i >= 0; i--) {
                             const c = dbMock.conversationsData[i];
@@ -462,14 +482,15 @@ if (currentUserObj?.role === 'admin') {
                     if (idx === -1) {
                         dbMock.conversationsData.push({
                             id: convoId,
-                            studentId: studentId,
+                            studentId: studentId || '',
                             studentName: data.studentName || 'Estudiante',
                             teacherId: teacherId || null,
-                            lastMessageText: data.lastMessageText || '',
-                            lastMessageTimestamp: data.lastMessageTimestamp || new Date().toISOString(),
-                            unreadByAdmin: data.unreadByAdmin ?? false,
-                            unreadByTeacher: data.unreadByTeacher ?? false,
-                            unreadByStudent: data.unreadByStudent ?? false,
+                            teacherName: data.teacherName,
+                            lastMessageText: lastMsg,
+                            lastMessageTimestamp: lastTimestamp,
+                            unreadByAdmin,
+                            unreadByTeacher,
+                            unreadByStudent,
                         } as any);
                     } else {
                         const existing = dbMock.conversationsData[idx];
@@ -477,14 +498,46 @@ if (currentUserObj?.role === 'admin') {
                             ...existing,
                             ...data,
                             id: convoId,
-                            studentId: studentId,
-                            unreadByAdmin: data.unreadByAdmin ?? existing.unreadByAdmin,
-                            unreadByTeacher: data.unreadByTeacher ?? existing.unreadByTeacher,
-                            unreadByStudent: data.unreadByStudent ?? existing.unreadByStudent,
+                            studentId: studentId || existing.studentId,
+                            teacherId: teacherId || existing.teacherId,
+                            teacherName: data.teacherName || existing.teacherName,
+                            lastMessageText: lastMsg || existing.lastMessageText,
+                            lastMessageTimestamp: lastTimestamp || existing.lastMessageTimestamp,
+                            unreadByAdmin,
+                            unreadByTeacher,
+                            unreadByStudent,
                         };
                     }
-                    eventEmitter.emit('message-update', { conversationId: convoId, ...data });
-                    eventEmitter.emit('direct-message-update', { conversationId: convoId, ...data });
+
+                    const eventPayload = {
+                        id: convoId,
+                        conversationId: convoId,
+                        courseId: data.courseId,
+                        type: data.type,
+                        studentId,
+                        teacherId,
+                        teacherName: data.teacherName,
+                        studentName: data.studentName,
+                        lastMessageText: lastMsg,
+                        lastMessageTimestamp: lastTimestamp,
+                        unreadByAdmin,
+                        unreadByTeacher,
+                        unreadByStudent,
+                        unreadCount: unreadCountMap,
+                        unreadByStudentId: data.unreadByStudentId || {},
+                        unreadByUserId: data.unreadByUserId || {},
+                        ...data
+                    };
+
+                    eventEmitter.emit('message-update', eventPayload);
+                    eventEmitter.emit('direct-message-update', eventPayload);
+                    if (data.type === 'peer' || rawConvoId.startsWith('peer_')) {
+                        eventEmitter.emit('peer-message-update', eventPayload);
+                    }
+                    if (data.type === 'group' || data.courseId || rawConvoId.startsWith('course_')) {
+                        eventEmitter.emit('group-message-update', eventPayload);
+                        eventEmitter.emit('course-group-message-update', eventPayload);
+                    }
                 } else if (change.type === 'removed') {
                     if (dbMock.conversationsData) {
                         for (let i = dbMock.conversationsData.length - 1; i >= 0; i--) {
@@ -2314,7 +2367,6 @@ import { httpsCallable } from 'firebase/functions';
 
 export const syncClearChatMessagesInFirestore = async (conversationId: string): Promise<void> => {
     try {
-        const { functions } = await import('./firebase');
         const adminClearChatMessages = httpsCallable(functions, 'adminClearChatMessages');
         await adminClearChatMessages({ conversationId });
     } catch (e) {

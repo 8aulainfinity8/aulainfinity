@@ -33,7 +33,7 @@ interface VoiceGroupCallProps {
 }
 
 export const VoiceGroupCall: React.FC<VoiceGroupCallProps> = ({ courseId, onClose }) => {
-    const { user } = useContext(AuthContext);
+    const { user, isFirebaseAuthReady } = useContext(AuthContext);
     const [inCall, setInCall] = useState(false);
     const [callRole, setCallRole] = useState<'caller' | 'callee' | null>(null);
     const [isConnecting, setIsConnecting] = useState(false);
@@ -57,32 +57,42 @@ export const VoiceGroupCall: React.FC<VoiceGroupCallProps> = ({ courseId, onClos
     const userName = user?.name || 'Invitado';
     const userRole = user?.role || 'student';
 
-    const roomId = `room_${courseId}`;
+    const rawCourseId = (courseId || '').trim();
+    const roomId = rawCourseId.startsWith('room_') ? rawCourseId : `room_${rawCourseId}`;
 
     // Listen to signaling room doc for active call offer state from another user
     useEffect(() => {
+        if (!isFirebaseAuthReady || !courseId) return;
+
         const signalingRoomRef = doc(db, 'rooms', roomId);
-        const unsubscribeSignaling = onSnapshot(signalingRoomRef, (snapshot) => {
-            if (snapshot.exists()) {
-                const data = snapshot.data();
-                const hasValidOfferFromOther = Boolean(
-                    data?.offer && 
-                    data?.status !== 'ended' && 
-                    data?.callerUid !== userId
-                );
-                setHasActiveOffer(hasValidOfferFromOther);
-            } else {
-                setHasActiveOffer(false);
+        const unsubscribeSignaling = onSnapshot(
+            signalingRoomRef, 
+            (snapshot) => {
+                if (snapshot.exists()) {
+                    const data = snapshot.data();
+                    const hasValidOfferFromOther = Boolean(
+                        data?.offer && 
+                        data?.status !== 'ended' && 
+                        data?.callerUid !== userId
+                    );
+                    setHasActiveOffer(hasValidOfferFromOther);
+                } else {
+                    setHasActiveOffer(false);
+                }
+            },
+            (err) => {
+                console.warn('[VoiceGroupCall] Signaling room listener error:', err.message);
             }
-        });
+        );
 
         return () => unsubscribeSignaling();
-    }, [roomId, userId]);
+    }, [roomId, userId, isFirebaseAuthReady, courseId]);
 
     // Auto connect on mount
     const hasAttemptedAutoConnect = useRef(false);
 
     useEffect(() => {
+        if (!isFirebaseAuthReady || !courseId) return;
         if (!inCall && !isConnecting && !hasAttemptedAutoConnect.current) {
             hasAttemptedAutoConnect.current = true;
             // Delay slightly to ensure Firestore & auth state settle
@@ -90,18 +100,26 @@ export const VoiceGroupCall: React.FC<VoiceGroupCallProps> = ({ courseId, onClos
                 handleSmartConnect();
             }, 300);
         }
-    }, [inCall, isConnecting]);
+    }, [inCall, isConnecting, isFirebaseAuthReady, courseId]);
 
     useEffect(() => {
+        if (!isFirebaseAuthReady || !courseId) return;
+
         const roomRef = doc(db, 'voice_group_calls', courseId);
-        const unsubscribe = onSnapshot(roomRef, (snapshot) => {
-            if (snapshot.exists()) {
-                const data = snapshot.data();
-                setParticipants(data.participants || []);
-            } else {
-                setParticipants([]);
+        const unsubscribe = onSnapshot(
+            roomRef, 
+            (snapshot) => {
+                if (snapshot.exists()) {
+                    const data = snapshot.data();
+                    setParticipants(data.participants || []);
+                } else {
+                    setParticipants([]);
+                }
+            },
+            (err) => {
+                console.warn('[VoiceGroupCall] Voice group call participants listener error:', err.message);
             }
-        });
+        );
 
         const handleBeforeUnload = () => {
             if (callSessionRef.current) {
@@ -120,7 +138,7 @@ export const VoiceGroupCall: React.FC<VoiceGroupCallProps> = ({ courseId, onClos
             }
             leaveRoomFirestore();
         };
-    }, [courseId]);
+    }, [courseId, isFirebaseAuthReady]);
 
     // Bind remote audio stream whenever session or audio element changes
     useEffect(() => {
@@ -387,16 +405,20 @@ export const VoiceGroupCall: React.FC<VoiceGroupCallProps> = ({ courseId, onClos
                     courseId,
                     active: true,
                     participants: [participantObj],
+                    participantIds: [userId],
                     updatedAt: new Date().toISOString(),
                     createdAt: new Date().toISOString()
                 }, { merge: true });
             } else {
                 const currentParticipants = roomSnap.data().participants || [];
+                const currentParticipantIds = roomSnap.data().participantIds || [];
                 const withoutMe = currentParticipants.filter((p: any) => p.id !== userId);
+                const withoutMeIds = currentParticipantIds.filter((id: string) => id !== userId);
                 await setDoc(roomRef, {
                     active: true,
                     updatedAt: new Date().toISOString(),
-                    participants: [...withoutMe, participantObj]
+                    participants: [...withoutMe, participantObj],
+                    participantIds: [...withoutMeIds, userId]
                 }, { merge: true });
             }
         } catch (err: any) {
@@ -424,6 +446,7 @@ export const VoiceGroupCall: React.FC<VoiceGroupCallProps> = ({ courseId, onClos
                     await setDoc(roomRef, {
                         active: false,
                         participants: [],
+                        participantIds: [],
                         updatedAt: new Date().toISOString()
                     }, { merge: true });
                     await setDoc(signalingRoomRef, {
@@ -433,8 +456,11 @@ export const VoiceGroupCall: React.FC<VoiceGroupCallProps> = ({ courseId, onClos
                         endedAt: new Date().toISOString()
                     }, { merge: true });
                 } else {
+                    const currentParticipantIds = roomSnap.data().participantIds || [];
+                    const withoutMeIds = currentParticipantIds.filter((id: string) => id !== userId);
                     await setDoc(roomRef, {
                         participants: withoutMe,
+                        participantIds: withoutMeIds,
                         updatedAt: new Date().toISOString()
                     }, { merge: true });
                 }
@@ -442,6 +468,7 @@ export const VoiceGroupCall: React.FC<VoiceGroupCallProps> = ({ courseId, onClos
                 await setDoc(roomRef, {
                     active: false,
                     participants: [],
+                    participantIds: [],
                     updatedAt: new Date().toISOString()
                 }, { merge: true });
             }

@@ -1182,10 +1182,15 @@ async function startServer() {
   process.on("SIGINT", () => handleShutdown("SIGINT"));
 
   // Simulated Reminder System
+  const REMINDER_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+  const ENABLE_REMINDER_LOGS = process.env.DEBUG_REMINDERS === "true";
+
   setInterval(async () => {
-    console.log("[REMINDER SYSTEM] Checking for tutoring sessions starting in 30 minutes...");
+    if (ENABLE_REMINDER_LOGS) {
+      console.log("[REMINDER SYSTEM] Checking for tutoring sessions starting in 30 minutes...");
+    }
     // Database query here
-  }, 60000);
+  }, REMINDER_INTERVAL_MS);
 }
 
 startServer().catch((error) => {
